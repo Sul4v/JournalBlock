@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+      NOT wired into the build on purpose.
+
+      com.apple.developer.family-controls requires Apple to approve the
+      capability for your team (https://developer.apple.com/contact/request/family-controls-distribution).
+      Adding it before approval makes automatic signing fail, so the app would
+      not build or run on your phone at all.
+
+      Once Apple grants it, add this to project.yml under the Dawn target:
+
+          entitlements:
+            path: FamilyControls.entitlements
+
+      then re-run `xcodegen generate`.
+    -->
+    <key>com.apple.developer.family-controls</key>
+    <true/>
+</dict>
+</plist>

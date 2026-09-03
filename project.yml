@@ -1,0 +1,86 @@
+name: Dawn
+options:
+  bundleIdPrefix: com.sulavshrestha
+  deploymentTarget:
+    iOS: "26.0"
+  createIntermediateGroups: true
+  groupSortPosition: top
+
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    IPHONEOS_DEPLOYMENT_TARGET: "26.0"
+    SWIFT_EMIT_LOC_STRINGS: YES
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    DEAD_CODE_STRIPPING: YES
+    CLANG_ENABLE_MODULES: YES
+    ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS: YES
+
+packages:
+  Supabase:
+    url: https://github.com/supabase/supabase-swift
+    from: "2.55.1"
+  RevenueCat:
+    url: https://github.com/RevenueCat/purchases-ios
+    from: "5.87.1"
+  GoogleSignIn:
+    url: https://github.com/google/GoogleSignIn-iOS
+    from: "9.2.0"
+
+targets:
+  Dawn:
+    type: application
+    platform: iOS
+    sources:
+      - path: Dawn
+    dependencies:
+      - package: Supabase
+        product: Supabase
+      - package: RevenueCat
+        product: RevenueCat
+      - package: GoogleSignIn
+        product: GoogleSignIn
+    info:
+      path: Config/Info.plist
+      properties:
+        CFBundleDisplayName: JournalBlock
+        # An empty UILaunchScreen renders systemBackground and then hands
+        # over to the app canvas. That flash is the first thing a user sees
+        # every morning, so the launch colour is a colourset with both
+        # appearances in it and follows whichever one is showing.
+        #
+        # No UIUserInterfaceStyle key: the app used to pin itself to Light.
+        # Appearance is now Preferences.appearance, applied at the root via
+        # .preferredColorScheme.
+        UILaunchScreen:
+          UIColorName: LaunchCanvas
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        NSAlarmKitUsageDescription: "Dawn uses alarms to wake you for your morning journal."
+        ITSAppUsesNonExemptEncryption: false
+        CFBundleURLTypes:
+          # Supabase sends confirmation and password-reset links here, so the
+          # email opens the app instead of Safari.
+          - CFBundleTypeRole: Editor
+            CFBundleURLName: supabase-auth
+            CFBundleURLSchemes:
+              - journalblock
+          - CFBundleTypeRole: Editor
+            CFBundleURLName: google-sign-in
+            # REVERSED_CLIENT_ID for the Google OAuth callback. Must stay in
+            # step with AppConfig.googleClientID.
+            CFBundleURLSchemes:
+              - com.googleusercontent.apps.552894245808-p0rl1uptn42343j14mrpmh5uacmgeuea
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.sulav.journalblock
+        PRODUCT_NAME: Dawn
+        MARKETING_VERSION: "0.1"
+        CURRENT_PROJECT_VERSION: "1"
+        DEVELOPMENT_ASSET_PATHS: ""
+        TARGETED_DEVICE_FAMILY: "1"
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: 6LYZDNCM4M
+        CODE_SIGN_ENTITLEMENTS: Dawn/Dawn.entitlements
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        SWIFT_STRICT_CONCURRENCY: minimal

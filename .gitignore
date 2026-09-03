@@ -1,0 +1,7 @@
+build/
+build-device/
+shots/
+*.xcodeproj/
+DerivedData/
+.DS_Store
+xcuserdata/
