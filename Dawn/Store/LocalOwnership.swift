@@ -28,6 +28,9 @@ enum LocalOwnership {
         guard let previous, previous != userID else { return }
         store.wipeLocalJournal()
         prefs.clearPersonalDetails()
+        // The previous account's blocks are gone, and their reminders would
+        // otherwise go on firing at times this user never chose.
+        ReminderService.shared.cancelAll()
     }
 
     /// Called when an account is deleted, so the next person to sign in on this

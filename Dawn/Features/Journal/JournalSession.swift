@@ -7,32 +7,28 @@ import Observation
 @Observable
 final class JournalSession {
     enum Step: Equatable {
-        case mood
         case prompt(Int)
         case complete
     }
 
-    let session: JournalPrompt.Session
+    let block: JournalBlock
     let prompts: [JournalPrompt]
     /// Parallel to `prompts`: one array of line-strings per prompt.
     var drafts: [[String]]
-    var mood: Int?
     var step: Step
     /// Set true once the user has finished, so the view can play the outro.
     private(set) var didComplete = false
 
-    /// Skips the mood card when re-opening a session that already has a mood.
     init(
-        session: JournalPrompt.Session,
+        block: JournalBlock,
         prompts: [JournalPrompt],
         existing: JournalEntry? = nil,
         startAt: Step? = nil
     ) {
-        self.session = session
+        self.block = block
         self.prompts = prompts
-        self.mood = existing?.mood
 
-        let previous = existing?.answers(for: session) ?? []
+        let previous = existing?.answers(forBlock: block.id) ?? []
         self.drafts = prompts.map { prompt in
             let saved = previous.first { $0.promptID == prompt.id }?.lines ?? []
             // Pad or trim to the prompt's current line count.
@@ -41,7 +37,7 @@ final class JournalSession {
             }
         }
 
-        self.step = startAt ?? (session == .morning ? .mood : .prompt(0))
+        self.step = startAt ?? .prompt(0)
         if prompts.isEmpty { self.step = .complete }
     }
 
@@ -56,25 +52,17 @@ final class JournalSession {
         promptIndex.map { prompts[$0] }
     }
 
-    /// Total cards including the mood check-in.
-    private var cardCount: Int {
-        prompts.count + (session == .morning ? 1 : 0)
-    }
-
     var progress: Double {
-        guard cardCount > 0 else { return 1 }
+        guard !prompts.isEmpty else { return 1 }
         switch step {
-        case .mood: return 0
         case let .prompt(index):
-            let offset = session == .morning ? 1 : 0
-            return Double(index + offset) / Double(cardCount)
+            return Double(index) / Double(prompts.count)
         case .complete: return 1
         }
     }
 
     var stepLabel: String {
         switch step {
-        case .mood: "Checking in"
         case let .prompt(index): "\(index + 1) of \(prompts.count)"
         case .complete: "Done"
         }
@@ -90,7 +78,6 @@ final class JournalSession {
 
     var canAdvance: Bool {
         switch step {
-        case .mood: mood != nil
         case let .prompt(index): isAnswered(index)
         case .complete: true
         }
@@ -105,15 +92,13 @@ final class JournalSession {
 
     var canGoBack: Bool {
         switch step {
-        case .mood, .complete: false
-        case let .prompt(index): index > 0 || session == .morning
+        case .complete: false
+        case let .prompt(index): index > 0
         }
     }
 
     func advance() {
         switch step {
-        case .mood:
-            step = prompts.isEmpty ? .complete : .prompt(0)
         case let .prompt(index):
             step = index + 1 < prompts.count ? .prompt(index + 1) : .complete
         case .complete:
@@ -122,8 +107,8 @@ final class JournalSession {
     }
 
     func goBack() {
-        guard case let .prompt(index) = step else { return }
-        step = index > 0 ? .prompt(index - 1) : .mood
+        guard case let .prompt(index) = step, index > 0 else { return }
+        step = .prompt(index - 1)
     }
 
     func markComplete() { didComplete = true }
@@ -131,32 +116,5 @@ final class JournalSession {
     /// Packaged for `JournalStore.record`.
     var payload: [(prompt: JournalPrompt, lines: [String])] {
         zip(prompts, drafts).map { ($0, $1) }
-    }
-}
-
-/// The five-point check-in shown before the morning prompts.
-enum Mood: Int, CaseIterable, Identifiable {
-    case heavy = 1, low, level, bright, luminous
-
-    var id: Int { rawValue }
-
-    var label: String {
-        switch self {
-        case .heavy: "Heavy"
-        case .low: "Low"
-        case .level: "Level"
-        case .bright: "Bright"
-        case .luminous: "Luminous"
-        }
-    }
-
-    var symbol: String {
-        switch self {
-        case .heavy: "cloud.rain"
-        case .low: "cloud"
-        case .level: "cloud.sun"
-        case .bright: "sun.max"
-        case .luminous: "sparkles"
-        }
     }
 }

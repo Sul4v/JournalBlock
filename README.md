@@ -28,12 +28,21 @@ The project is generated from `project.yml` by [XcodeGen](https://github.com/yon
 Each stage must clear before the next is rendered. `RootView` owns this chain.
 
 ```
-quiz  →  account  →  paywall  →  today's page  →  the app
+quiz  →  account  →  paywall  →  permissions  →  the app, with prompts ready for tomorrow
 ```
 
-**1. Quiz (12 screens).** Hook → name → seven questions → wake time →
-"building your plan" → a personalised plan → social proof → press-and-hold
-commitment. Single-choice questions auto-advance; nothing takes more than a tap.
+**1. Quiz (14 screens).** Hook → name → seven questions → wake time → bedtime →
+"building your plan" → a personalised plan → the morning sitting → the evening
+sitting → press-and-hold commitment. Every question carries a Continue button: tapping
+an option only selects it, so a mis-tap costs a correction rather than a screen.
+
+The answers no longer pick the prompts. Everyone starts on the same five
+questions — three in the morning, two at night — and the two sitting screens
+are where the user sets each time and sees the actual questions before paying.
+A page chosen from a quiz was a guess wearing personalisation's clothes, and
+every word of this one is editable in Settings the moment they disagree with
+it. The quiz still earns its length: it makes the user articulate their own
+problem, and it writes the plan screen and the paywall headline.
 
 **0. Welcome.** Two doors. New users get the quiz; anyone who already has an
 account skips straight to sign-in. Making a returning user answer fourteen
@@ -54,7 +63,27 @@ email".
 plan list leads with a single recommended option, and price is framed per-month
 against the annual term.
 
-**4. The morning gate.** Unchanged from v1 — no dismiss, no tab bar, no escape.
+**4. Permissions.** Three, in the order the feature needs them, each explained
+before iOS puts up its own dialog: notifications, Screen Time, then the alarm.
+Notifications come first because they are load-bearing — the shield's "Write it
+now" button cannot open this app directly, so it posts a notification and the
+user taps that (see below). Granting Screen Time opens the app picker inline,
+because authorisation without a selection shields nothing at all.
+
+Asked *after* the paywall: before it, the app is asking someone who hasn't
+decided to keep it to hand over Screen Time. Every step is skippable, and
+declining any of them leaves a working app with the in-app gate — a wall of
+permissions the user can't get past is both a bad first minute and a reliable
+App Review rejection. `Preferences.hasPrimedPermissions` records that the screen
+was *seen*, not that anything was granted, so a decline isn't re-asked on every
+launch. Settings is where they change their mind.
+
+**5. Ready for tomorrow.** New signups land on Today with both sittings laid
+out — the questions they'll answer tomorrow — and an Edit prompts link. The first session starts the next
+calendar day after they clear the paywall. This date survives relaunches and
+sign-outs; previewing prompts does not create an entry or count toward a streak.
+From the next day onward, the morning gate requires that day's session before
+opening the main tabs (unless strict mode is off).
 
 Why this order: the quiz makes the user articulate their own problem before
 being asked for anything; the account exists before the paywall so a purchase
@@ -165,6 +194,18 @@ in every currency.
 **These must resolve before you submit** — a dead Terms link on a paywall is a
 guaranteed rejection.
 
+Third-party assets, both of which need their notice carried wherever you list
+acknowledgements:
+
+- `FingerprintMark` (the commit-screen print) is Material Symbols
+  `fingerprint`, weight 100 — Google, Apache License 2.0.
+- `GoogleMark` is Google's own sign-in mark, used under their branding
+  guidelines.
+
+Note the print is deliberately *not* SF Symbols' `touchid`. Symbols depicting
+Apple technologies are licensed only for referring to those technologies, and
+this screen is a commitment gesture, not a biometric prompt.
+
 ---
 
 ## Account, sign out, delete
@@ -186,20 +227,71 @@ guaranteed rejection.
 | Screen | State |
 |---|---|
 | Morning gate | Greeting → journal. No dismiss, no tab bar, no escape |
-| Journal session | Mood check-in, one prompt per card, completion card |
-| Today | Streak, totals, mood, this morning's writing, evening reflection |
+| Journal session | One prompt per card, completion card |
+| Today | Streak, then one section per block — what was written, or Begin |
 | Entries | All past days, tap through to a full read |
-| Settings | Account, wake time, alarm, strict mode, app blocking, prompts |
-| Prompts | Reword, disable, add your own, delete custom ones |
+| Settings | Account, backup, wake alarm, strict mode, app blocking, prompts |
+| Your Prompts | Blocks: a time, a name, its prompts. Add, retime, rename, delete |
+
+**Blocks.** The day is however many sittings the user wants, each with its own
+time and prompts. A new account starts with two — Morning and Evening, at the
+times set during signup — and can add, retime, rename or delete any of them.
+Any number of blocks may hold the lock ("locks your phone until written"); the
+first of the day is owed from midnight, the rest as their hour arrives, and
+deleting the last one holding it hands the lock on rather than dropping it. Any block written counts
+for the streak. Optional per-block reminder notifications; the AlarmKit wake
+alarm stays with the gating block. Existing installs migrate on first launch:
+the old wake time becomes a "Morning" block holding the lock, evening prompts
+become an "Evening" block at 9pm, and an evening that was switched off arrives
+with its prompts off rather than missing.
 
 **Alarm (AlarmKit).** Real iOS 26 API — rings through silent mode and Focus.
 Missing the Lock Screen countdown, which needs a widget extension target.
 
-**Blocking other apps (Screen Time).** `ShieldService` is complete but the
-`com.apple.developer.family-controls` entitlement **requires Apple to approve
-your team**, and adding it before approval breaks signing. It's deliberately not
-in the build. `FamilyControls.entitlements` has the one-line change.
+**Blocking other apps (Screen Time).** Live. `com.apple.developer.family-controls`
+is on the app target and all three extensions; it **requires Apple to approve
+your team** and adding it before approval breaks signing, so a fresh clone on an
+unapproved team will not sign.
 Request access: https://developer.apple.com/contact/request/family-controls-distribution
+
+Four pieces:
+
+| Piece | Where | Job |
+| --- | --- | --- |
+| `ShieldService` | app | Authorisation, the app selection, applying and clearing the shield while the app runs |
+| `ShieldConfiguration` | extension | Draws the shield the user hits, naming the owed block |
+| `ShieldAction` | extension | The two buttons on it |
+| `DeviceActivityMonitor` | extension | Re-applies the shield on schedule when the app isn't running |
+
+The extensions are separate processes and **cannot read SwiftData**, so
+`Shared/GateBridge.swift` mirrors the owed block and the app selection into the
+`group.com.sulav.journalblock` app group. That app group and `GateBridge.appGroup`
+must stay in step, as must `GateBridge.storeName` and the `ManagedSettingsStore`
+name in `ShieldService` — two differently-named stores means a shield the app
+believes it cleared is still standing.
+
+**The shield cannot open this app.** `ShieldActionDelegate` may only return
+`.none`, `.close` or `.defer`. There is no `open(url:)`, `UIApplication` is
+unavailable to that extension type, and `NSExtensionContext` isn't offered
+either. Reaching `UIApplication` via `NSClassFromString` does work and is what
+several shipping blockers do, but it is private API on an entitlement Apple
+reviews by hand. So "Write it now" posts an immediate local notification
+carrying `journalblock://block/<uuid>` and closes the shielded app: the user
+lands on the home screen with the banner already there, and one tap opens the
+gate. That is one more tap than we'd like and it is why the permission primer
+asks for notifications first — without them the button can only bounce the user
+to the home screen.
+
+`GateScheduler` registers one `DeviceActivitySchedule` per gating block. The
+first starts at midnight rather than its own hour, matching
+`JournalStore.pendingGateBlock`; every window ends at 23:59 so a shield can
+never outlive the day it belongs to.
+
+**Extension Info.plists are generated.** XcodeGen writes them from
+`project.yml`, so `NSExtension` is declared there — anything hand-written into
+`ShieldAction/Info.plist` and friends is overwritten by the next
+`xcodegen generate`, and an extension with no `NSExtension` dict is one the
+system silently never launches.
 
 ---
 
@@ -211,8 +303,8 @@ Request access: https://developer.apple.com/contact/request/family-controls-dist
 -dawnScreen paywall -dawnDemoAccount -dawnSeedSampleData
 ```
 
-- `-dawnScreen` — `onboarding` `auth` `paywall` `account` `gate` `journal`
-  `writing` `complete` `home` `history` `settings` `prompts`
+- `-dawnScreen` — `onboarding` `auth` `paywall` `permissions` `account` `gate`
+  `journal` `writing` `complete` `home` `tomorrow` `history` `settings` `prompts`
 - Forced screens show an **Exit debug** badge (bottom right) that drops back
   into the normal flow. Several debug screens are pushed views with no parent,
   so without it a launch strands the app until you force-quit — and a debug
@@ -221,9 +313,10 @@ Request access: https://developer.apple.com/contact/request/family-controls-dist
 - `-dawnSlowStore` — holds the paywall in its loading state so the plan
   skeletons can be inspected. RevenueCat caches offerings, so the real
   window is far too short to screenshot after the first fetch.
-- `-dawnOnboardingStep <0–12>` — jump into the quiz at any step
-  (0 name, 1–7 questions, 8 wake time, 9 analysing, 10 plan, 11 proof,
-  12 commit). The old step 0 hook is now the separate welcome screen.
+- `-dawnOnboardingStep <0–14>` — jump into the quiz at any step
+  (0 name, 1–7 questions, 8 wake time, 9 bedtime, 10 analysing, 11 plan,
+  12 morning sitting, 13 evening sitting, 14 commit). The old step 0 hook is
+  now the separate welcome screen.
 - `-dawnDemoAccount` — sign into a local demo account and grant entitlement
 - `-dawnSeedSampleData` — two weeks of entries, with gaps, so streaks are real
 
@@ -236,7 +329,8 @@ Screenshots from this pass are in `shots/`.
 1. **Fill in the three keys and run the schema.** Nothing else can be verified
    against reality until then.
 2. **Get the legal pages up.** Blocking for submission.
-3. **Request the Family Controls entitlement.** Long lead time, and the app's
+3. **Family Controls entitlement — already on the build.** Approval has a long
+   lead time and the app will not sign without it; the app's
    premise depends on it.
 4. **Wire a paywall A/B test.** RevenueCat can serve different offerings by
    cohort; the paywall already renders whatever it's given, so this is mostly
@@ -257,16 +351,12 @@ Screenshots from this pass are in `shots/`.
   **placeholders**. Replace them with real reviews before you ship — invented
   social proof is both a legal problem and an App Review problem.
 - No email-confirmation waiting screen; the app surfaces it as an inline error.
-- The background carries a dust glimmer: 70 small specks, each flashing on its
-  own 3–9s clock and floating a Lissajous path (separate x/y periods, so it
-  never traces a loop the eye can follow). Size and brightness are inversely
-  paired, which is what gives the field depth. Drawn as one `Canvas` in a
-  `TimelineView` at 24fps rather than 70 animated views, and it respects
-  `prefers-reduced-motion` by switching off entirely.
-- Note the timeline redraws on every screen. In the simulator the dust costs
-  ~2–3% CPU over a ~6% baseline that is mostly software rendering; if battery
-  ever shows up on device, gating this to the onboarding flow is the first
-  lever.
+- The background is neutral ivory with a single, static daylight wash that
+  fades into the page. Its tint follows the time of day and adapts to dark mode;
+  Increase Contrast softens the wash further. Fine gold flecks drift upward and
+  occasionally glint, drawn together in one Canvas at up to 30fps. The timeline
+  pauses while the app is inactive; Reduce Motion shows a subdued, still field.
+  The gradient itself stays still, with no grain or large glowing patches.
 - The commitment gesture is a press-and-hold on a fingerprint. VoiceOver can't
   express a hold, so it gets a plain activate action instead — worth checking if
   you care about the accessibility audit.

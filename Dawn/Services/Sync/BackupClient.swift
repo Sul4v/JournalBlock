@@ -172,6 +172,25 @@ struct BackupClient {
         }
     }
 
+    /// Removes one day's row, after the user deleted that entry on a device.
+    ///
+    /// Nothing here is a tombstone: the row simply stops existing, so any other
+    /// device that still holds the day will push it back on its next sync. That
+    /// is the accepted limit of a scheme with no server-side history, and the
+    /// window is the time between the two devices syncing.
+    func deleteEntry(for userID: String, day: String) async throws {
+        do {
+            try await client
+                .from("journal_entries")
+                .delete()
+                .eq("user_id", value: userID)
+                .eq("day", value: day)
+                .execute()
+        } catch {
+            throw Self.mapped(error)
+        }
+    }
+
     func upload(_ rows: [EntryRow]) async throws {
         guard !rows.isEmpty else { return }
         do {

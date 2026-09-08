@@ -30,7 +30,6 @@ struct AnalysingCard: View {
     /// durations are hand-set: quick acknowledgement, a long think on the two
     /// steps that carry the most personalisation, a short flourish to close.
     private var stages: [Stage] {
-        let time = String(format: "%02d:%02d", answers.wakeHour, answers.wakeMinute)
         let thieves = answers.selected(.thieves).compactMap { id in
             QuizQuestion.thieves.options.first { $0.id == id }?.label.lowercased()
         }
@@ -38,10 +37,14 @@ struct AnalysingCard: View {
 
         return [
             Stage(label: "Reading your answers", duration: 0.45),
-            Stage(label: "Sizing the page to \(answers.committedMinutes) minutes", duration: 1.30),
+            // Not "sizing the page to N minutes" any more. The page is the
+            // same five questions for everyone, and a progress line claiming
+            // work the app isn't doing is the kind of thing users notice the
+            // second time they see this screen.
+            Stage(label: "Setting up your two sittings", duration: 1.30),
             Stage(label: gate.map { "Setting the gate on \($0)" } ?? "Setting the gate on your phone",
                   duration: 0.70),
-            Stage(label: "Timing the alarm for \(time)", duration: 1.55),
+            Stage(label: "Timing the alarm for \(answers.wakeTimeLabel)", duration: 1.55),
             Stage(label: "Writing your plan", duration: 0.80),
         ]
     }
@@ -53,7 +56,6 @@ struct AnalysingCard: View {
             Spacer(minLength: 0)
 
             VStack(alignment: .leading, spacing: Theme.Space.sm) {
-                Text("One moment").eyebrowStyle()
                 Text("Building your plan")
                     .font(Theme.Typography.serif(32))
                     .foregroundStyle(Theme.Palette.ink)
@@ -172,7 +174,6 @@ struct PlanCard: View {
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.Space.lg) {
                 VStack(alignment: .leading, spacing: Theme.Space.sm) {
-                    Text("Built for you").eyebrowStyle()
                     Text(plan.headline)
                         .font(Theme.Typography.serif(32))
                         .foregroundStyle(Theme.Palette.ink)
@@ -224,62 +225,6 @@ struct PlanCard: View {
     }
 }
 
-// MARK: - Social proof
-
-/// Shown only when `AppConfig.showsSocialProof` is on and there are real
-/// reviews behind it. The five gold stars, the "4.8 · App Store" line, and two
-/// named reviewers with tenure were all invented for an app that has never
-/// shipped — App Review Guideline 2.3.1, and Apple asks you not to redraw App
-/// Store ratings in-app regardless.
-struct ProofCard: View {
-    private var quotes: [(text: String, name: String)] {
-        AppConfig.showsSocialProof ? AppConfig.SocialProof.quotes : []
-    }
-
-    @State private var appeared = false
-
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: Theme.Space.lg) {
-                Text(quotes.isEmpty
-                     ? "A few minutes each morning, before the day starts."
-                     : "People who stopped waking up to a screen")
-                    .font(Theme.Typography.serif(32))
-                    .foregroundStyle(Theme.Palette.ink)
-                    .lineSpacing(3)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityAddTraits(.isHeader)
-
-                VStack(spacing: Theme.Space.sm) {
-                    ForEach(Array(quotes.enumerated()), id: \.offset) { offset, quote in
-                        GlassCard {
-                            VStack(alignment: .leading, spacing: 10) {
-                                Text(quote.text)
-                                    .font(Theme.Typography.serif(17))
-                                    .foregroundStyle(Theme.Palette.ink)
-                                    .lineSpacing(4)
-                                    .fixedSize(horizontal: false, vertical: true)
-                                Text(quote.name)
-                                    .font(Theme.Typography.sans(12, weight: .medium))
-                                    .foregroundStyle(Theme.Palette.inkTertiary)
-                            }
-                        }
-                        .accessibilityElement(children: .combine)
-                        .opacity(appeared ? 1 : 0)
-                        .offset(y: appeared ? 0 : 20 * Theme.Motion.rise)
-                        .animation(Theme.Motion.settle.delay(Double(offset) * 0.1), value: appeared)
-                    }
-                }
-
-                Color.clear.frame(height: Theme.Space.md)
-            }
-            .pageGutter()
-        }
-        .scrollIndicators(.hidden)
-        .onAppear { appeared = true }
-    }
-}
-
 // MARK: - Commitment
 
 /// A fingerprint you hold, not a button you tap.
@@ -302,12 +247,23 @@ struct CommitCard: View {
     private let holdDuration = 1.8
     private let printSize: CGFloat = 96
 
+    private var printWidth: CGFloat { printSize * 0.86 }
+    private var printHeight: CGFloat { printSize * 0.86 }
+
+    private func printMark(tinted style: some ShapeStyle) -> some View {
+        Image("FingerprintMark")
+            .renderingMode(.template)
+            .resizable()
+            .scaledToFit()
+            .frame(width: printWidth, height: printHeight)
+            .foregroundStyle(style)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.lg) {
             Spacer(minLength: 0)
 
             VStack(alignment: .leading, spacing: Theme.Space.sm) {
-                Text("Last thing").eyebrowStyle()
                 Text(name.trimmed.isEmpty
                      ? "Commit to your mornings."
                      : "\(name.trimmed), commit to your mornings.")
@@ -349,11 +305,9 @@ struct CommitCard: View {
 
     private var fingerprint: some View {
         ZStack {
-            // Ring that closes as the hold completes.
-            Circle()
-                .stroke(Theme.Palette.ink.opacity(0.07), lineWidth: 3)
-                .frame(width: printSize + 44, height: printSize + 44)
-
+            // The arc that closes as the hold completes. It used to run over a
+            // static track ring, which at rest was just a hoop drawn around the
+            // print — so the arc now sweeps in from nothing.
             Circle()
                 .trim(from: 0, to: progress)
                 .stroke(
@@ -375,37 +329,35 @@ struct CommitCard: View {
                     in: .circle
                 )
 
-            // The unfilled mark.
-            //
-            // Was `touchid`. SF Symbols depicting Apple technologies are
-            // licensed only for referring to those technologies, and a
-            // fingerprint primes people to expect a biometric prompt that
-            // never comes. The ring and the fill carry the meaning anyway.
-            Image(systemName: done ? "checkmark" : "hand.tap")
-                .font(.system(size: done ? printSize * 0.5 : printSize * 0.62, weight: .ultraLight))
-                .foregroundStyle(done ? Theme.Palette.emberDeep : Theme.Palette.inkTertiary)
+            // The unfilled print. Material Symbols' `fingerprint` at weight
+            // 100 — the hairline cut is the only one light enough to sit
+            // beside the rest of the screen. Not SF Symbols' `touchid`, which
+            // is licensed only for referring to Touch ID itself.
+            if done {
+                Image(systemName: "checkmark")
+                    .font(.system(size: printSize * 0.5, weight: .ultraLight))
+                    .foregroundStyle(Theme.Palette.emberDeep)
+            } else {
+                printMark(tinted: Theme.Palette.inkTertiary)
 
-            if !done {
-                Image(systemName: "hand.tap")
-                    .font(.system(size: printSize * 0.62, weight: .ultraLight))
-                    .foregroundStyle(
-                        LinearGradient(
-                            colors: [Theme.Palette.ember, Theme.Palette.gold],
-                            startPoint: .bottom, endPoint: .top
-                        )
+                printMark(
+                    tinted: LinearGradient(
+                        colors: [Theme.Palette.ember, Theme.Palette.gold],
+                        startPoint: .bottom, endPoint: .top
                     )
-                    .mask(alignment: .bottom) {
-                        Rectangle()
-                            .frame(height: printSize * 0.7 * progress)
-                    }
+                )
+                .mask(alignment: .bottom) {
+                    Rectangle()
+                        .frame(height: printHeight * progress)
+                }
 
                 // Scan line riding the top edge of the fill.
                 if progress > 0.02 && progress < 0.99 {
                     Capsule()
                         .fill(Theme.Palette.gold)
-                        .frame(width: printSize * 0.62, height: 1.5)
+                        .frame(width: printWidth, height: 1.5)
                         .shadow(color: Theme.Palette.gold.opacity(0.8), radius: 5)
-                        .offset(y: (printSize * 0.35) - (printSize * 0.7 * progress))
+                        .offset(y: (printHeight / 2) - (printHeight * progress))
                 }
             }
         }
@@ -415,12 +367,17 @@ struct CommitCard: View {
         .animation(Theme.Motion.settle, value: done)
         .animation(Theme.Motion.quick, value: isPressing)
         .overlay {
-            // One outward pulse on success.
-            Circle()
-                .stroke(Theme.Palette.ember.opacity(pulse ? 0 : 0.5), lineWidth: 2)
-                .scaleEffect(pulse ? 1.5 : 1)
-                .frame(width: printSize + 44, height: printSize + 44)
-                .allowsHitTesting(false)
+            // One outward pulse on success — and only then. This ring used to
+            // be rendered always, at half opacity, fading to nothing as it
+            // expanded: which meant the "pulse" was really a hoop drawn around
+            // the print at all times, and the burst was it leaving.
+            if done {
+                Circle()
+                    .stroke(Theme.Palette.ember.opacity(pulse ? 0 : 0.5), lineWidth: 2)
+                    .scaleEffect(pulse ? 1.5 : 1)
+                    .frame(width: printSize + 44, height: printSize + 44)
+                    .allowsHitTesting(false)
+            }
         }
         .contentShape(Circle())
         .gesture(
@@ -479,7 +436,12 @@ struct CommitCard: View {
         done = true
         isPressing = false
         Haptics.success()
-        withAnimation(.easeOut(duration: 0.7)) { pulse = true }
+        // A frame later, so the ring above is on screen unexpanded before it
+        // starts expanding. Set in the same pass, SwiftUI has no "from" state
+        // to animate out of and the pulse never shows.
+        DispatchQueue.main.async {
+            withAnimation(.easeOut(duration: 0.7)) { pulse = true }
+        }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { onCommit() }
     }
 }

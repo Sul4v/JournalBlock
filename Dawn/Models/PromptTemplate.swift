@@ -77,6 +77,51 @@ struct PromptVariant: Identifiable, Hashable, Sendable {
     }
 }
 
+// MARK: - Drafts
+
+/// A question that has been chosen but not created yet.
+///
+/// Exists for the block creation flow, which collects a page before there is a
+/// block to hang it on. Either half of the picker produces one: a wording
+/// lifted from the catalog, which keeps its `originKey` so "reset wording"
+/// still works once it's real, or one the user wrote, which has no origin
+/// because there is nothing to reset it to.
+struct PromptDraft: Identifiable, Hashable, Sendable {
+    let id: UUID
+    let title: String
+    let hint: String
+    let style: PromptStyle
+    /// The catalog wording this started as. Empty for a prompt the user wrote.
+    let originKey: String
+
+    init(
+        id: UUID = UUID(),
+        title: String,
+        hint: String = "",
+        style: PromptStyle = .lines(1),
+        originKey: String = ""
+    ) {
+        self.id = id
+        self.title = title
+        self.hint = hint
+        self.style = style
+        self.originKey = originKey
+    }
+
+    init(_ variant: PromptVariant) {
+        self.init(
+            title: variant.title,
+            hint: variant.hint,
+            style: variant.style,
+            originKey: variant.key
+        )
+    }
+
+    /// What the question is for. A user-written one is `.open` — an open prompt
+    /// is a real role, not a missing one.
+    var role: PromptRole { PromptRole.owning(originKey) ?? .open }
+}
+
 // MARK: - Roles
 
 /// What a prompt is *for*, independent of how it's worded.
@@ -133,7 +178,7 @@ enum PromptRole: String, Codable, CaseIterable, Identifiable, Sendable {
         switch self {
         case .gratitude:
             [
-                .init("gratitude.three", "I am grateful for…", "Three things. Small ones count.", .lines(3)),
+                .init("gratitude.three", "I am grateful for…", "", .lines(3)),
                 .init("gratitude.good-now", "What's good right now?", "It doesn't have to be big.", .lines(3)),
                 .init("gratitude.who", "Who made something easier for me lately?", "", .lines(2)),
                 .init("gratitude.missed", "What went right yesterday that I didn't notice?", "", .lines(2)),
@@ -142,6 +187,7 @@ enum PromptRole: String, Codable, CaseIterable, Identifiable, Sendable {
             ]
         case .intention:
             [
+                .init("intention.great", "What would make today great?", "", .lines(3)),
                 .init("intention.good-day", "What would make today a good day?", "Things you can actually control.", .lines(3)),
                 .init("intention.one-thing", "What's the one thing that has to happen today?", "", .lines(1)),
                 .init("intention.if-well", "If today goes well, what did I do?", "", .lines(2)),
@@ -150,6 +196,7 @@ enum PromptRole: String, Codable, CaseIterable, Identifiable, Sendable {
             ]
         case .affirmation:
             [
+                .init("affirmation.daily", "Daily affirmations. I am…", "", .lines(2)),
                 .init("affirmation.today-i-am", "Today, I am…", "Present tense. Write it like it's already true.", .lines(1)),
                 .init("affirmation.kind-of-person", "Today I'm the kind of person who…", "", .lines(1)),
                 .init("affirmation.by-tonight", "What do I want to be true of me by tonight?", "", .lines(1)),
@@ -175,12 +222,14 @@ enum PromptRole: String, Codable, CaseIterable, Identifiable, Sendable {
             ]
         case .reflection:
             [
+                .init("reflection.amazing", "3 Amazing things that happened today…", "", .lines(3)),
                 .init("reflection.went-well", "What went well today?", "Three things. They can be small.", .lines(3)),
                 .init("reflection.remember", "What's worth remembering about today?", "", .lines(3)),
                 .init("reflection.contained", "What did today actually contain?", "", .freeform)
             ]
         case .improvement:
             [
+                .init("improvement.better", "How could I have made today better?", "", .lines(2)),
                 .init("improvement.differently", "What would I do differently?", "", .lines(1)),
                 .init("improvement.got-away", "Where did today get away from me?", "", .lines(1)),
                 .init("improvement.one-change", "One thing I'd change about today.", "", .lines(1))
@@ -260,22 +309,28 @@ extension PromptTemplate {
         catalog.first { $0.id == id }
     }
 
-    /// The gratitude-and-intention format. Named descriptively rather than
-    /// after the notebook that popularised it: "The Five Minute Journal" is a
-    /// registered trademark of Intelligent Change, and a paid app shipping a
-    /// browsable template under that name is a different exposure from an app
-    /// with an unnamed default set. The wording here is ours.
+    /// The set every new account starts with, and the only one onboarding
+    /// installs. Three questions in the morning, two at night.
+    ///
+    /// The wording matches the printed journal this format comes from, at the
+    /// owner's explicit instruction. Two things follow from that, and both are
+    /// deliberate. The name stays off the product: "The Five Minute Journal"
+    /// is a registered trademark of Intelligent Change, and shipping under it
+    /// is a different order of exposure from shipping the questions. And these
+    /// five strings are the one part of the catalog that is not ours — the
+    /// remaining variants below were written for this app, so reach for those
+    /// first if the wording ever has to change.
     static let classicFive = PromptTemplate(
         id: "classic-five",
         name: "The Classic Five",
         blurb: "Gratitude, then intention. The format most people mean by “journaling”.",
-        attribution: "The gratitude-and-intention format popularised by Tim Ferriss.",
+        attribution: nil,
         seeds: [
             Seed(.gratitude, "gratitude.three"),
-            Seed(.intention, "intention.good-day"),
-            Seed(.affirmation, "affirmation.today-i-am"),
-            Seed(.reflection, "reflection.went-well"),
-            Seed(.improvement, "improvement.differently")
+            Seed(.intention, "intention.great"),
+            Seed(.affirmation, "affirmation.daily"),
+            Seed(.reflection, "reflection.amazing"),
+            Seed(.improvement, "improvement.better")
         ]
     )
 
@@ -337,135 +392,24 @@ extension PromptTemplate {
     )
 }
 
-// MARK: - The recommended page
+// MARK: - Sizing a page
 
-/// What the quiz turns into: a real page, sized to the minutes the user said
-/// they had, with a sentence explaining why they got this one.
-///
-/// This is the thing the onboarding screen renders and the plan screen counts.
-/// Before it existed the plan screen promised "5 prompts each morning" to
-/// anyone who picked ten minutes, and then shipped three.
-struct PromptPlan {
-    let template: PromptTemplate
-    let morning: [PromptTemplate.Seed]
-    let evening: [PromptTemplate.Seed]
-    /// Why this template, in the user's own terms. Nil when the recommendation
-    /// is just the sensible default — a made-up reason is worse than none.
-    let reason: String?
-
-    var estimatedMorningSeconds: Int {
-        morning.reduce(0) { $0 + $1.variant.style.estimatedSeconds }
+extension PromptTemplate {
+    /// Rough seconds one half of the page takes to answer honestly.
+    func estimatedSeconds(for session: JournalPrompt.Session) -> Int {
+        seeds(for: session).reduce(0) { $0 + $1.variant.style.estimatedSeconds }
     }
 
-    /// "About 4 minutes". Rounded to the nearest minute, floored at one.
-    var morningDuration: String {
-        PromptPlan.duration(seconds: estimatedMorningSeconds)
+    /// "About 2 minutes". Rounded to the nearest minute, floored at one.
+    ///
+    /// Shown wherever the app tells someone what a page will cost them, which
+    /// is the one number setup enthusiasm must not be allowed to inflate.
+    func duration(for session: JournalPrompt.Session) -> String {
+        Self.duration(seconds: estimatedSeconds(for: session))
     }
 
     static func duration(seconds: Int) -> String {
         let minutes = max(1, Int((Double(seconds) / 60).rounded()))
         return "About \(minutes) minute\(minutes == 1 ? "" : "s")"
     }
-
-    static func make(from answers: QuizAnswers) -> PromptPlan {
-        // Order matters and set membership doesn't cover it: `selected` returns
-        // the wants in the order they were tapped, which is the closest thing
-        // to a priority the quiz collects. Reading them out of a Set instead
-        // made the same answers produce different pages on different runs.
-        let wantOrder = answers.selected(.wants)
-        let wants = Set(wantOrder)
-        let history = answers.selected(.journalHistory).first
-        let minutes = answers.committedMinutes
-
-        let template: PromptTemplate
-        let reason: String?
-
-        if minutes <= 3 {
-            template = .oneThing
-            reason = "You said three minutes, so this is one question you can answer properly."
-        } else if history == "regular" {
-            template = .openPage
-            reason = "You already journal — this gets out of your way and just holds the door shut."
-        } else if wants.contains("less_anxiety") || wants.contains("calm") {
-            template = .beforeTheNoise
-            reason = wants.contains("less_anxiety")
-                ? "You said you want less anxiety, so this one starts by naming what's already there."
-                : "You said you want calm, so this one clears your head before it asks anything of you."
-        } else if wants.contains("control") {
-            template = .stoicMorning
-            reason = "You said you want a sense of control, and that's the whole shape of this one."
-        } else if wants.contains("gratitude") {
-            template = .classicFive
-            reason = "You said you want gratitude — this is the format built around it."
-        } else {
-            template = .classicFive
-            reason = nil
-        }
-
-        // Extend the template with what the answers asked for and it doesn't
-        // already cover. Without this, someone who said ten minutes got the
-        // identical page to someone who said five — the minutes question would
-        // have had no effect on anything, which is the bug this whole plan
-        // exists to kill, just wearing a different hat.
-        var seeds = template.seeds(for: .morning)
-        for extra in extras(for: wantOrder, limit: maxExtras) {
-            guard !seeds.contains(where: { $0.role == extra.role }) else { continue }
-            seeds.append(extra)
-        }
-
-        return PromptPlan(
-            template: template,
-            morning: fit(seeds, toSeconds: minutes * 60),
-            evening: template.seeds(for: .evening),
-            reason: reason
-        )
-    }
-
-    /// At most two. A template is a designed set, and a ten-minute budget with
-    /// six wants ticked would otherwise assemble a seven-question page — which
-    /// is a thing people agree to at signup and resent at 6am.
-    private static let maxExtras = 2
-
-    /// One prompt per want, in the order the user picked them. Only wants that
-    /// name something a page can actually do appear here; "focus" is covered by
-    /// every template's intention slot, so it adds nothing rather than padding.
-    private static func extras(for wants: [String], limit: Int) -> [Seed] {
-        var found: [Seed] = []
-        for want in wants {
-            let seed: Seed? = switch want {
-            case "less_anxiety": Seed(.decompression, "decompression.dreading")
-            case "calm": Seed(.decompression, "decompression.chest")
-            case "control": Seed(.control, "control.mine")
-            case "gratitude": Seed(.gratitude, "gratitude.three")
-            case "time": Seed(.protection, "protection.block")
-            default: nil
-            }
-            if let seed { found.append(seed) }
-            if found.count == limit { break }
-        }
-        return found
-    }
-
-    /// Trims a page to the time the user committed to, never below one prompt.
-    ///
-    /// Trims rather than pads: a template is a designed set, and filling the
-    /// slack with whatever fits would undo that. Someone who wants a longer
-    /// page adds to it on the next screen, having seen what a short one costs.
-    private static func fit(
-        _ seeds: [PromptTemplate.Seed],
-        toSeconds budget: Int
-    ) -> [PromptTemplate.Seed] {
-        var kept: [PromptTemplate.Seed] = []
-        var spent = 0
-        for seed in seeds {
-            let cost = seed.variant.style.estimatedSeconds
-            if kept.isEmpty || spent + cost <= budget {
-                kept.append(seed)
-                spent += cost
-            }
-        }
-        return kept
-    }
-
-    private typealias Seed = PromptTemplate.Seed
 }

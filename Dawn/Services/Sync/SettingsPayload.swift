@@ -8,6 +8,20 @@ import CryptoKit
 /// wrote for themselves ("what am I avoiding today?") says as much about them
 /// as the answer does.
 struct SettingsPayload: Codable, Equatable {
+    /// One sitting in the user's day. Added in schema 3.
+    struct Block: Codable, Equatable {
+        /// Preserved like a prompt's id, and for a stronger reason:
+        /// `Prompt.blockID` and every answer ever written point at it.
+        var id: UUID
+        var title: String
+        var hour: Int
+        var minute: Int
+        var order: Int
+        var gatesDay: Bool
+        var remindersEnabled: Bool
+        var legacySession: String
+    }
+
     struct Prompt: Codable, Equatable {
         /// Preserved, not regenerated: `PromptAnswer.promptID` points at it, so
         /// a new id would orphan every restored answer from its question.
@@ -28,6 +42,10 @@ struct SettingsPayload: Codable, Equatable {
         var originTemplateID: String = ""
         var originKey: String = ""
 
+        /// Added in schema 3. Nil from a v1 or v2 device, where the prompt's
+        /// `session` is all there is to go on — see `JournalStore.applyPrompts`.
+        var blockID: UUID?
+
         init(
             id: UUID,
             title: String,
@@ -40,7 +58,8 @@ struct SettingsPayload: Codable, Equatable {
             styleKind: String = PromptStyle.Kind.lines.rawValue,
             role: String = PromptRole.open.rawValue,
             originTemplateID: String = "",
-            originKey: String = ""
+            originKey: String = "",
+            blockID: UUID? = nil
         ) {
             self.id = id
             self.title = title
@@ -54,6 +73,7 @@ struct SettingsPayload: Codable, Equatable {
             self.role = role
             self.originTemplateID = originTemplateID
             self.originKey = originKey
+            self.blockID = blockID
         }
 
         /// Tolerant of anything a v1 device wrote. A phone still on the old
@@ -75,6 +95,7 @@ struct SettingsPayload: Codable, Equatable {
                 ?? PromptRole.open.rawValue
             originTemplateID = try container.decodeIfPresent(String.self, forKey: .originTemplateID) ?? ""
             originKey = try container.decodeIfPresent(String.self, forKey: .originKey) ?? ""
+            blockID = try container.decodeIfPresent(UUID.self, forKey: .blockID)
         }
     }
 
@@ -92,15 +113,36 @@ struct SettingsPayload: Codable, Equatable {
         var wakeHour: Int
         var wakeMinute: Int
         var quizAnswers: QuizAnswers
+        /// Added when the alarm and shield switches became one mode. Optional
+        /// so a payload written before that still decodes; `Preferences.apply`
+        /// falls back to `blockAppsUntilDone`, which carried the same meaning.
+        var gateMode: String?
     }
 
-    /// 2 since prompts gained roles, styles and provenance. Bumping this
+    /// 3 since the fixed morning/evening pair became blocks. Bumping this
     /// changes the fingerprint for every existing user, so the first launch
     /// after the update pushes one extra settings blob — which is harmless and
     /// cheaper than guessing at a payload's shape.
-    var schema: Int = 2
+    var schema: Int = 3
     var prompts: [Prompt]
     var settings: Settings
+    /// Empty from a v1 or v2 device, which had no blocks to send.
+    var blocks: [Block] = []
+
+    init(prompts: [Prompt], settings: Settings, blocks: [Block] = []) {
+        self.prompts = prompts
+        self.settings = settings
+        self.blocks = blocks
+    }
+
+    /// Tolerant of a v1 or v2 payload, which carries no `blocks` key at all.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        schema = try container.decodeIfPresent(Int.self, forKey: .schema) ?? 1
+        prompts = try container.decode([Prompt].self, forKey: .prompts)
+        settings = try container.decode(Settings.self, forKey: .settings)
+        blocks = try container.decodeIfPresent([Block].self, forKey: .blocks) ?? []
+    }
 
     /// Canonical encoding: sorted keys so the same content always produces the
     /// same bytes. The whole change-detection scheme depends on that — see

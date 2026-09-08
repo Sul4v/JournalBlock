@@ -11,14 +11,27 @@ struct EntryPayload: Codable {
         var session: String
         var order: Int
         var lines: [String]
+
+        // Added in schema 2, when the fixed morning/evening pair became blocks.
+        // Optional rather than defaulted: a v1 payload genuinely doesn't know
+        // which block an answer belongs to, and the restore has to be able to
+        // tell "no block recorded" from "block id happens to be all zeroes".
+        var blockID: UUID?
+        var blockTitle: String?
     }
 
     /// Lets a future format change be detected rather than mis-parsed.
-    var schema: Int = 1
+    /// 2 since days record which blocks were finished rather than just a
+    /// morning and an evening.
+    var schema: Int = 2
     var createdAt: Date
+    /// Legacy check-in value, preserved when syncing older entries.
     var mood: Int?
+    /// Still written in schema 2, so a phone on the old build that pulls this
+    /// day down keeps a working gate. See `JournalStore.stamp`.
     var morningCompletedAt: Date?
     var eveningCompletedAt: Date?
+    var completions: [BlockCompletion]?
     var answers: [Answer]
 
     static let encoder: JSONEncoder = {

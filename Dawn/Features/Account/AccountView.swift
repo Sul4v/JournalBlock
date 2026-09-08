@@ -15,6 +15,7 @@ struct AccountView: View {
     @State private var showDelete = false
     @State private var showPaywall = false
     @State private var message: String?
+    @State private var isRestoring = false
 
     var body: some View {
         ZStack {
@@ -28,6 +29,7 @@ struct AccountView: View {
                         AuthErrorNote(message: message)
                     }
                     exits
+                    deleteAccount
                     Color.clear.frame(height: Theme.Space.xl)
                 }
                 .pageGutter()
@@ -71,6 +73,14 @@ struct AccountView: View {
 
     // MARK: - Sections
 
+    /// The person's own name, if we actually have one — from the account
+    /// first, then whatever they typed into onboarding.
+    private var personName: String? {
+        if let name = auth.user?.displayName?.trimmed, !name.isEmpty { return name }
+        let local = prefs.displayName.trimmed
+        return local.isEmpty ? nil : local
+    }
+
     private var identity: some View {
         GlassCard {
             HStack(spacing: Theme.Space.md) {
@@ -81,12 +91,19 @@ struct AccountView: View {
                     .background(Circle().fill(Theme.Palette.ink.opacity(0.85)))
 
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(auth.user?.displayName ?? prefs.displayName.trimmed.ifEmpty("Your account"))
-                        .font(Theme.Typography.serif(20))
-                        .foregroundStyle(Theme.Palette.ink)
+                    // No name to show means no line: a placeholder that just
+                    // says "Your account" under a screen titled Account is
+                    // filler, and the email identifies you better anyway.
+                    if let personName {
+                        Text(personName)
+                            .font(Theme.Typography.serif(20))
+                            .foregroundStyle(Theme.Palette.ink)
+                    }
                     Text(auth.user?.email ?? "Not signed in")
-                        .font(Theme.Typography.sans(13))
-                        .foregroundStyle(Theme.Palette.inkTertiary)
+                        .font(personName == nil
+                              ? Theme.Typography.sans(15, weight: .medium)
+                              : Theme.Typography.sans(13))
+                        .foregroundStyle(personName == nil ? Theme.Palette.ink : Theme.Palette.inkTertiary)
                         .lineLimit(1)
                         .truncationMode(.middle)
                     if let since = auth.user?.createdAt {
@@ -102,7 +119,7 @@ struct AccountView: View {
 
     private var subscription: some View {
         VStack(alignment: .leading, spacing: Theme.Space.sm) {
-            SectionHeading(eyebrow: "Billing", title: "Subscription")
+            SectionHeading(title: "Subscription")
 
             GlassCard {
                 VStack(alignment: .leading, spacing: Theme.Space.md) {
@@ -127,9 +144,16 @@ struct AccountView: View {
 
                     Divider().overlay(Theme.Palette.rule)
 
+                    // One filled action and one quiet one. Two identical
+                    // capsules side by side gave equal weight to the thing the
+                    // user came for and the thing they need once a year, and
+                    // left a ragged gap where the row ran out of buttons.
                     HStack(spacing: Theme.Space.sm) {
                         if subs.isSubscribed {
-                            GhostButton(title: "Manage", systemImage: "creditcard", isNested: true) {
+                            GhostButton(title: "Manage",
+                                        systemImage: "creditcard",
+                                        isNested: true,
+                                        emphasis: .prominent) {
                                 // The App Store is the only place a subscription
                                 // can actually be changed or cancelled.
                                 if let url = URL(string: "https://apps.apple.com/account/subscriptions") {
@@ -137,25 +161,38 @@ struct AccountView: View {
                                 }
                             }
                         } else {
-                            GhostButton(title: "See plans", systemImage: "sparkles", isNested: true) {
+                            GhostButton(title: "See plans",
+                                        systemImage: "sparkles",
+                                        isNested: true,
+                                        emphasis: .prominent) {
                                 showPaywall = true
                             }
                         }
 
-                        GhostButton(title: "Restore", systemImage: "arrow.clockwise", isNested: true) {
-                            Task {
-                                do {
-                                    message = nil
-                                    try await subs.restore()
-                                    Haptics.success()
-                                } catch {
-                                    message = error.localizedDescription
-                                }
-                            }
+                        Spacer(minLength: Theme.Space.xs)
+
+                        TextButton(title: "Restore",
+                                   font: Theme.Typography.sans(14, weight: .medium),
+                                   isLoading: isRestoring) {
+                            restorePurchases()
                         }
-                        Spacer(minLength: 0)
                     }
                 }
+            }
+        }
+    }
+
+    private func restorePurchases() {
+        guard !isRestoring else { return }
+        Task {
+            isRestoring = true
+            defer { isRestoring = false }
+            do {
+                message = nil
+                try await subs.restore()
+                Haptics.success()
+            } catch {
+                message = error.localizedDescription
             }
         }
     }
@@ -183,39 +220,41 @@ struct AccountView: View {
 
     private var exits: some View {
         VStack(alignment: .leading, spacing: Theme.Space.sm) {
-            SectionHeading(eyebrow: "Careful", title: "Leaving")
+            SectionHeading(title: "Leaving")
 
             GlassCard(tint: Theme.Palette.ink.opacity(0.04)) {
-                VStack(spacing: Theme.Space.md) {
-                    Button {
-                        Haptics.tap()
-                        showSignOutConfirm = true
-                    } label: {
-                        row(icon: "rectangle.portrait.and.arrow.right",
-                            title: "Sign out",
-                            detail: "Your journal stays on this phone.",
-                            tint: Theme.Palette.ink)
-                    }
-                    .buttonStyle(.plain)
-
-                    Divider().overlay(Theme.Palette.rule)
-
-                    Button {
-                        // Opening the screen isn't the destructive act — the
-                        // warning haptic belongs on a failed deletion, not on
-                        // a navigation. Firing it here trains people to ignore it.
-                        Haptics.tap(.light)
-                        showDelete = true
-                    } label: {
-                        row(icon: "trash",
-                            title: "Delete account",
-                            detail: "Permanent. Removes your account and everything in it.",
-                            tint: Theme.Palette.danger)
-                    }
-                    .buttonStyle(.plain)
+                Button {
+                    Haptics.tap()
+                    showSignOutConfirm = true
+                } label: {
+                    row(icon: "rectangle.portrait.and.arrow.right",
+                        title: "Sign out",
+                        detail: "Your journal stays on this phone.",
+                        tint: Theme.Palette.ink)
                 }
+                .buttonStyle(.plain)
             }
         }
+    }
+
+    /// Deletion is the last thing on the page and the quietest thing on it:
+    /// findable when you're looking for it, never in the way when you aren't.
+    private var deleteAccount: some View {
+        Button {
+            // Opening the screen isn't the destructive act — the warning
+            // haptic belongs on a failed deletion, not on a navigation.
+            // Firing it here trains people to ignore it.
+            Haptics.tap(.light)
+            showDelete = true
+        } label: {
+            Text("Delete account")
+                .font(Theme.Typography.sans(13))
+                .foregroundStyle(Theme.Palette.inkTertiary.opacity(0.7))
+                .frame(maxWidth: .infinity)
+                .frame(minHeight: Theme.Space.tapTarget)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     private func row(icon: String, title: String, detail: String, tint: Color) -> some View {
@@ -242,11 +281,5 @@ struct AccountView: View {
         .frame(minHeight: Theme.Space.tapTarget)
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
-    }
-}
-
-extension String {
-    func ifEmpty(_ fallback: String) -> String {
-        isEmpty ? fallback : self
     }
 }

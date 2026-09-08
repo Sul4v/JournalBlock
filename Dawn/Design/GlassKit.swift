@@ -8,7 +8,12 @@ import SwiftUI
 /// was fighting the system's specular pass and changed appearance depending on
 /// what happened to be behind the card.
 struct GlassCard<Content: View>: View {
-    var tint: Color = Theme.Palette.emberSoft.opacity(0.22)
+    /// Neutral by default. The ember wash used to be the default, which made
+    /// every card in the app faintly yellow and left the tint saying nothing —
+    /// a card that meant something by being warm looked like all the others.
+    /// Warmth is now opt-in and carries meaning where it appears: a sitting
+    /// still owed on Today, the recovery phrase, a destructive step.
+    var tint: Color = Theme.Palette.ink.opacity(0.04)
     var radius: CGFloat = Theme.Radius.card
     var padding: CGFloat = Theme.Space.md
     @ViewBuilder var content: Content
@@ -68,9 +73,30 @@ struct EmberButton: View {
             .background(
                 Capsule(style: .continuous)
                     .fill(isEnabled
-                          ? AnyShapeStyle(Theme.Palette.ink.opacity(0.92))
+                          // A flat slab reads as a banner, not a control. The
+                          // vertical gradient plus the top highlight below give
+                          // it a lit edge, which is what says "raised".
+                          ? AnyShapeStyle(LinearGradient(
+                                colors: [Theme.Palette.ink.opacity(0.97),
+                                         Theme.Palette.ink.opacity(0.86)],
+                                startPoint: .top,
+                                endPoint: .bottom))
                           : AnyShapeStyle(Theme.Palette.disabledFill))
             )
+            .overlay(
+                Capsule(style: .continuous)
+                    .strokeBorder(
+                        LinearGradient(
+                            colors: [Theme.Palette.canvas.opacity(isEnabled ? 0.28 : 0),
+                                     Color.clear],
+                            startPoint: .top,
+                            endPoint: .bottom),
+                        lineWidth: 1)
+            )
+            // Invisible on the dark canvas by design; on paper it lifts the
+            // capsule off the card behind it.
+            .shadow(color: Theme.Palette.ink.opacity(isEnabled ? 0.22 : 0),
+                    radius: 10, x: 0, y: 4)
             .contentShape(Capsule(style: .continuous))
         }
         .buttonStyle(PressScaleStyle())
@@ -83,10 +109,24 @@ struct EmberButton: View {
 struct GhostButton: View {
     var title: String
     var systemImage: String?
+    /// An icon after the label rather than before it. Leading icons say what
+    /// kind of thing the button is; a trailing arrow says the button takes you
+    /// somewhere. Pass one or the other, not both.
+    var trailingImage: String?
     /// Set on ghost buttons that sit *inside* a `GlassCard`. Glass on glass
     /// flattens the hierarchy, so nested instances fall back to a plain style.
     var isNested: Bool = false
+    /// How loudly the control asks to be pressed. A row of two identical soft
+    /// capsules makes the user read both before choosing; the one they came
+    /// for gets `.prominent` and the rest stay quiet.
+    var emphasis: Emphasis = .quiet
     var action: () -> Void
+
+    enum Emphasis {
+        case quiet
+        /// Filled ember. At most one per row.
+        case prominent
+    }
 
     var body: some View {
         Button {
@@ -102,46 +142,102 @@ struct GhostButton: View {
                     .font(Theme.Typography.sans(15, weight: .medium))
                     .lineLimit(1)
                     .fixedSize(horizontal: true, vertical: false)
+                if let trailingImage {
+                    Image(systemName: trailingImage)
+                        .font(Theme.Typography.sans(13, weight: .semibold))
+                }
             }
-            .foregroundStyle(Theme.Palette.inkSecondary)
+            // Ember when nested, because grey text in a grey capsule on a
+            // grey card is the shape every platform uses for "you can't press
+            // this". The glass version has depth to say it's live; the flat
+            // one has only colour. Filled, the capsule carries the colour and
+            // the label goes to canvas.
+            .foregroundStyle(labelTint)
             .padding(.horizontal, Theme.Space.md)
             .frame(minHeight: Theme.Space.tapTarget)
             .contentShape(Capsule(style: .continuous))
         }
-        .modifier(GhostSurface(isNested: isNested))
+        .modifier(GhostSurface(isNested: isNested, emphasis: emphasis))
+    }
+
+    private var labelTint: Color {
+        switch (emphasis, isNested) {
+        case (.prominent, _): Theme.Palette.canvas
+        case (.quiet, true): Theme.Palette.emberDeep
+        case (.quiet, false): Theme.Palette.inkSecondary
+        }
     }
 }
 
-/// Nested ghost buttons get a hairline capsule instead of a second glass layer.
+/// Nested ghost buttons get a warm capsule instead of a second glass layer.
 private struct GhostSurface: ViewModifier {
     let isNested: Bool
+    let emphasis: GhostButton.Emphasis
 
     func body(content: Content) -> some View {
-        if isNested {
+        switch (emphasis, isNested) {
+        case (.prominent, _):
+            // Solid, and no border: the fill already draws the edge, and the
+            // stroke only showed up as a second, slightly different one. The
+            // gradient is the same top-lit trick `EmberButton` uses, scaled
+            // down for a control that lives inside a card.
             content
                 .buttonStyle(PressScaleStyle())
                 .background(
                     Capsule(style: .continuous)
-                        .fill(Theme.Palette.ink.opacity(0.05))
+                        .fill(LinearGradient(
+                            colors: [Theme.Palette.emberDeep.opacity(0.92),
+                                     Theme.Palette.emberDeep],
+                            startPoint: .top,
+                            endPoint: .bottom))
+                )
+                // Black, not ember: a shadow tinted with the fill colour
+                // reads as a halo in dark mode, where `emberDeep` is the
+                // *light* end of the ramp. Black grounds the capsule on
+                // paper and disappears against the night canvas, which is
+                // what a shadow should do in both.
+                .shadow(color: .black.opacity(0.18), radius: 8, x: 0, y: 3)
+        case (.quiet, true):
+            content
+                .buttonStyle(PressScaleStyle())
+                .background(
+                    Capsule(style: .continuous)
+                        .fill(Theme.Palette.emberSoft.opacity(0.32))
                 )
                 .overlay(
                     Capsule(style: .continuous)
-                        .strokeBorder(Theme.Palette.rule, lineWidth: 1)
+                        .strokeBorder(Theme.Palette.ember.opacity(0.30), lineWidth: 1)
                 )
-        } else {
+        case (.quiet, false):
             content.buttonStyle(.glass)
         }
     }
 }
 
 /// A small icon-only control — back chevrons, close buttons, the password eye.
-/// Always at least 44×44pt, whatever the glyph measures.
+///
+/// The glass is painted at `diameter` and the tap target is 44pt around it, so
+/// the control stays comfortably hittable without drawing a button the size of
+/// its own touch area. `.buttonStyle(.glass)` can't do this: it paints behind
+/// whatever the label measures, and it pads horizontally more than vertically,
+/// so a square glyph came out an oval and a 44pt one came out enormous.
 struct IconButton: View {
     var systemName: String
     var accessibilityTitle: String
     var size: CGFloat = 14
+    /// The visible circle. Chrome — back, close, the password eye — leaves this
+    /// alone; a control that is the point of its screen can ask for more.
+    var diameter: CGFloat = Theme.Space.iconControl
     var isGlass: Bool = true
+    /// Chrome stays grey. A control that is the action of its card asks for
+    /// the colour the app uses to mean "press this".
+    var tint: Color = Theme.Palette.inkSecondary
     var action: () -> Void
+
+    /// What each edge needs to grow by to reach the 44pt minimum.
+    private var hitInset: CGFloat {
+        max(0, (Theme.Space.tapTarget - diameter) / 2)
+    }
 
     var body: some View {
         Button {
@@ -150,12 +246,19 @@ struct IconButton: View {
         } label: {
             Image(systemName: systemName)
                 .font(Theme.Typography.sans(size, weight: .semibold))
-                .foregroundStyle(Theme.Palette.inkSecondary)
-                .frame(width: 22, height: 22)
-                .frame(minWidth: Theme.Space.tapTarget, minHeight: Theme.Space.tapTarget)
-                .contentShape(Circle())
+                .foregroundStyle(tint)
+                .frame(width: diameter, height: diameter)
+                .modifier(IconSurface(isGlass: isGlass))
+                // Grow to the tap target, claim it as the hit area, then hand
+                // the layout back. A plain 44pt frame would have the control
+                // occupy 44pt of the page too — which pushed whatever sits
+                // beside it across, and left the circle inset from the gutter
+                // so it no longer lined up with the text below it.
+                .padding(hitInset)
+                .contentShape(Rectangle())
+                .padding(-hitInset)
         }
-        .modifier(IconSurface(isGlass: isGlass))
+        .buttonStyle(PressScaleStyle())
         .accessibilityLabel(accessibilityTitle)
     }
 }
@@ -165,9 +268,9 @@ private struct IconSurface: ViewModifier {
 
     func body(content: Content) -> some View {
         if isGlass {
-            content.buttonStyle(.glass)
+            content.glassEffect(.regular.interactive(), in: .circle)
         } else {
-            content.buttonStyle(PressScaleStyle())
+            content
         }
     }
 }
@@ -179,6 +282,9 @@ struct TextButton: View {
     var title: String
     var font: Font = Theme.Typography.sans(13, weight: .medium)
     var tint: Color = Theme.Palette.inkSecondary
+    /// Swaps the label for a spinner *in place*, so the row doesn't reflow
+    /// around a control that changed width mid-tap.
+    var isLoading: Bool = false
     var action: () -> Void
 
     var body: some View {
@@ -189,11 +295,21 @@ struct TextButton: View {
             Text(title)
                 .font(font)
                 .foregroundStyle(tint)
+                .opacity(isLoading ? 0 : 1)
+                .overlay {
+                    if isLoading {
+                        ProgressView()
+                            .controlSize(.small)
+                            .tint(tint)
+                    }
+                }
                 .padding(.horizontal, Theme.Space.xs)
                 .frame(minHeight: Theme.Space.tapTarget)
                 .contentShape(Rectangle())
         }
         .buttonStyle(PressScaleStyle())
+        .disabled(isLoading)
+        .accessibilityLabel(isLoading ? "\(title), in progress" : title)
     }
 }
 
@@ -241,17 +357,23 @@ struct ProgressRule: View {
 
 /// A single line of the user's writing. Underlined, not boxed — it should feel
 /// like a page, not a form.
-struct WritingLine: View {
+/// Generic over its focus value rather than an `Int`.
+///
+/// A line used to be identified by its position inside one prompt, which was
+/// enough while the screen showed one prompt at a time. On a page of them,
+/// "line 2" names a field in every question at once, so the caller supplies
+/// whatever value is unique in its own context.
+struct WritingLine<Field: Hashable>: View {
     var placeholder: String
     @Binding var text: String
-    var index: Int
+    var field: Field
     var accessibilityTitle: String
     /// Minimum height of the *field*, for prompts that want a paragraph rather
     /// than a line. It has to sit here rather than on the whole line: stretching
     /// the enclosing stack just adds space under the rule, leaving a one-line
     /// field floating above a gap. Nil sizes to the text, as before.
     var minHeight: CGFloat?
-    @FocusState.Binding var focused: Int?
+    @FocusState.Binding var focused: Field?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -266,12 +388,12 @@ struct WritingLine: View {
             .tint(Theme.Palette.ember)
             .lineSpacing(6)
             .frame(minHeight: minHeight, alignment: .topLeading)
-            .focused($focused, equals: index)
+            .focused($focused, equals: field)
             .submitLabel(.next)
             .accessibilityLabel(accessibilityTitle)
 
             Rectangle()
-                .fill(focused == index ? Theme.Palette.ember.opacity(0.55) : Theme.Palette.rule)
+                .fill(focused == field ? Theme.Palette.ember.opacity(0.55) : Theme.Palette.rule)
                 .frame(height: 1)
                 .animation(Theme.Motion.quick, value: focused)
         }
@@ -281,21 +403,14 @@ struct WritingLine: View {
 // MARK: - Section heading
 
 struct SectionHeading: View {
-    var eyebrow: String?
     var title: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Theme.Space.xs) {
-            if let eyebrow {
-                Text(eyebrow).eyebrowStyle()
-            }
-            Text(title)
-                .font(Theme.Typography.serif(26))
-                .foregroundStyle(Theme.Palette.ink)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(.isHeader)
+        Text(title)
+            .font(Theme.Typography.serif(26))
+            .foregroundStyle(Theme.Palette.ink)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityAddTraits(.isHeader)
     }
 }
 

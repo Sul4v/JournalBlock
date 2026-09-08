@@ -2,7 +2,13 @@ import SwiftUI
 
 /// One day, read back. Typeset like a page rather than a record.
 struct EntryDetailView: View {
+    @Environment(\.journalStore) private var store
+    @Environment(BackupController.self) private var backup
+    @Environment(\.dismiss) private var dismiss
+
     let entry: JournalEntry
+
+    @State private var isConfirmingDelete = false
 
     var body: some View {
         ZStack {
@@ -10,26 +16,13 @@ struct EntryDetailView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: Theme.Space.lg) {
-                    VStack(alignment: .leading, spacing: Theme.Space.xs) {
-                        Text(entry.day.formatted(.dateTime.weekday(.wide)))
-                            .eyebrowStyle()
-                        Text(entry.day.formatted(.dateTime.day().month(.wide).year()))
-                            .font(Theme.Typography.serif(30))
-                            .foregroundStyle(Theme.Palette.ink)
-                        if let mood = entry.mood.flatMap({ Mood(rawValue: $0) }) {
-                            HStack(spacing: 6) {
-                                Image(systemName: mood.symbol)
-                                    .font(.system(size: 12))
-                                Text("Arrived \(mood.label.lowercased())")
-                                    .font(Theme.Typography.sans(13))
-                            }
-                            .foregroundStyle(Theme.Palette.inkSecondary)
-                            .padding(.top, 2)
-                        }
-                    }
+                    Text(entry.day.formatted(.dateTime.day().month(.wide).year()))
+                        .font(Theme.Typography.serif(30))
+                        .foregroundStyle(Theme.Palette.ink)
 
-                    section(title: "Morning", answers: entry.answers(for: .morning))
-                    section(title: "Evening", answers: entry.answers(for: .evening))
+                    ForEach(entry.answersByBlock, id: \.blockID) { group in
+                        section(title: group.title, answers: group.answers)
+                    }
 
                     Color.clear.frame(height: Theme.Space.lg)
                 }
@@ -40,6 +33,51 @@ struct EntryDetailView: View {
         }
         .navigationTitle(entry.day.formatted(.dateTime.day().month(.abbreviated)))
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    Button(role: .destructive) {
+                        isConfirmingDelete = true
+                    } label: {
+                        Label("Delete entry", systemImage: "trash")
+                    }
+                } label: {
+                    // Bare glyph, as in `BlockDetailView`: iOS draws its own
+                    // round glass button behind a toolbar item, and the circled
+                    // symbol would put a second ring inside the first.
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(Theme.Palette.ink)
+                }
+                .accessibilityLabel("Entry options")
+            }
+        }
+        // An alert rather than a confirmation dialog, for the reason spelled
+        // out in `BlockDetailView`: raised from a toolbar menu, the dialog
+        // anchors itself to the navigation bar and covers the title.
+        .alert("Delete this entry?", isPresented: $isConfirmingDelete) {
+            Button("Delete", role: .destructive) { delete() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(deleteWarning)
+        }
+    }
+
+    /// Says the two things the user can't see: that the backed-up copy goes
+    /// too, and — on today — that the day becomes unwritten again, which means
+    /// a gating block will ask for it back.
+    private var deleteWarning: String {
+        let base = "What you wrote that day is erased on this device and removed from your backup. This can't be undone."
+        guard Calendar.current.isDateInToday(entry.day) else { return base }
+        return base + " Today counts as unwritten afterwards, so any block that locks your phone will ask for it again."
+    }
+
+    private func delete() {
+        let day = store.deleteEntry(entry)
+        backup.forget(day: day)
+        Haptics.success()
+        // Pop first: this screen is bound to an entry that no longer exists.
+        dismiss()
     }
 
     @ViewBuilder

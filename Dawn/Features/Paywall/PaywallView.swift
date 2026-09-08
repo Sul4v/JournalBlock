@@ -335,56 +335,58 @@ private struct PricingCard: View {
 
     var body: some View {
         Button(action: action) {
-            // Square cells: a flexible shape carries the aspect ratio and the
-            // content rides on top. Putting `.aspectRatio` after
-            // `maxWidth: .infinity` instead collapses the pair into slivers.
-            Color.clear
-                .aspectRatio(1, contentMode: .fit)
-                .overlay(alignment: .topLeading) {
-                    VStack(alignment: .leading, spacing: 0) {
-                        HStack(alignment: .firstTextBaseline) {
-                            Text(plan.title)
-                                .font(Theme.Typography.sans(14, weight: .semibold))
-                                .foregroundStyle(Theme.Palette.ink)
-                                .textCase(.uppercase)
-                                .tracking(0.4)
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.8)
-                            Spacer(minLength: 4)
-                            Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                                .font(.system(size: 17))
-                                .foregroundStyle(isSelected ? Theme.Palette.ember : Theme.Palette.ruleStrong)
-                                .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 3 }
-                        }
-
-                        Spacer(minLength: 4)
-
-                        Text(plan.price)
-                            .font(Theme.Typography.sans(25, weight: .medium))
-                            .foregroundStyle(Theme.Palette.ink)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.6)
-
-                        // The struck-through anchor is the whole argument for
-                        // annual. Reserved even when absent so both align.
-                        Text(plan.anchorPrice ?? " ")
-                            .font(Theme.Typography.sans(13))
-                            .foregroundStyle(Theme.Palette.inkTertiary)
-                            .strikethrough(plan.anchorPrice != nil, color: Theme.Palette.inkTertiary)
-                            .lineLimit(1)
-                            .padding(.top, 2)
-
-                        Spacer(minLength: 4)
-
-                        Text(footnote)
-                            .font(Theme.Typography.sans(11))
-                            .foregroundStyle(Theme.Palette.inkTertiary)
-                            .lineSpacing(1)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    .padding(15)
+            // Roughly square, but the content sets the height. An overlay on a
+            // fixed-aspect shape doesn't grow its host, so at large Dynamic
+            // Type the footnote spilled out the bottom and collided with the
+            // line under the row.
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(plan.title)
+                        .font(Theme.Typography.sans(14, weight: .semibold))
+                        .foregroundStyle(Theme.Palette.ink)
+                        .textCase(.uppercase)
+                        .tracking(0.4)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.6)
+                    Spacer(minLength: 4)
+                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                        .font(.system(size: 17))
+                        .foregroundStyle(isSelected ? Theme.Palette.ember : Theme.Palette.ruleStrong)
+                        .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 3 }
                 }
-                .contentShape(Rectangle())
+
+                Spacer(minLength: 4)
+
+                Text(plan.price)
+                    .font(Theme.Typography.sans(25, weight: .medium))
+                    .foregroundStyle(Theme.Palette.ink)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.45)
+
+                // The struck-through anchor is the whole argument for
+                // annual. Reserved even when absent so both align.
+                Text(plan.anchorPrice ?? " ")
+                    .font(Theme.Typography.sans(13))
+                    .foregroundStyle(Theme.Palette.inkTertiary)
+                    .strikethrough(plan.anchorPrice != nil, color: Theme.Palette.inkTertiary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
+                    .padding(.top, 2)
+
+                Spacer(minLength: 4)
+
+                Text(footnote)
+                    .font(Theme.Typography.sans(11))
+                    .foregroundStyle(Theme.Palette.inkTertiary)
+                    .lineSpacing(1)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(15)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+            // `minHeight` keeps the square proportion at default text sizes;
+            // `maxHeight` makes the shorter card match the taller one.
+            .frame(minHeight: 148, maxHeight: .infinity, alignment: .topLeading)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .glassEffect(
@@ -441,39 +443,38 @@ private struct PricingCardSkeleton: View {
     private let shape = RoundedRectangle(cornerRadius: 22, style: .continuous)
 
     var body: some View {
-        Color.clear
-            .aspectRatio(1, contentMode: .fit)
-            .overlay(alignment: .topLeading) {
-                VStack(alignment: .leading, spacing: 0) {
-                    HStack(alignment: .top) {
-                        SkeletonBar(width: 58, height: 12)
-                        Spacer(minLength: 4)
-                        Circle()
-                            .fill(Theme.Palette.ink.opacity(0.09))
-                            .frame(width: 17, height: 17)
-                    }
-
-                    Spacer(minLength: 4)
-
-                    SkeletonBar(width: 104, height: 24, radius: 6)
-                    SkeletonBar(width: 62, height: 12)
-                        .padding(.top, 8)
-
-                    Spacer(minLength: 4)
-
-                    SkeletonBar(width: 92, height: 9)
-                    SkeletonBar(width: 58, height: 9)
-                        .padding(.top, 5)
-                }
-                .padding(15)
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .top) {
+                SkeletonBar(width: 58, height: 12)
+                Spacer(minLength: 4)
+                Circle()
+                    .fill(Theme.Palette.ink.opacity(0.09))
+                    .frame(width: 17, height: 17)
             }
-            .glassEffect(
-                .regular.tint(Theme.Palette.emberSoft.opacity(0.10)),
-                in: .rect(cornerRadius: 22)
-            )
-            .overlay {
-                shape.strokeBorder(Theme.Palette.rule, lineWidth: 1)
-            }
-            .shimmering(in: shape)
+
+            Spacer(minLength: 4)
+
+            SkeletonBar(width: 104, height: 24, radius: 6)
+            SkeletonBar(width: 62, height: 12)
+                .padding(.top, 8)
+
+            Spacer(minLength: 4)
+
+            SkeletonBar(width: 92, height: 9)
+            SkeletonBar(width: 58, height: 9)
+                .padding(.top, 5)
+        }
+        .padding(15)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        // Same footprint as `PricingCard`, so nothing jumps when prices land.
+        .frame(minHeight: 148, maxHeight: .infinity, alignment: .topLeading)
+        .glassEffect(
+            .regular.tint(Theme.Palette.emberSoft.opacity(0.10)),
+            in: .rect(cornerRadius: 22)
+        )
+        .overlay {
+            shape.strokeBorder(Theme.Palette.rule, lineWidth: 1)
+        }
+        .shimmering(in: shape)
     }
 }

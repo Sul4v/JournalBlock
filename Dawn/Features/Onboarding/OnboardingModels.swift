@@ -5,6 +5,12 @@ import Foundation
 /// The personalisation quiz. Every question here earns its place twice: it
 /// tells Dawn something it actually uses, and it makes the user articulate the
 /// problem in their own words before we ask them for anything.
+///
+/// What "uses" means changed when the prompt set stopped being chosen from the
+/// answers: these now drive the plan screen and the paywall headline rather
+/// than the questions the user gets. That is still a real job — the funnel
+/// works because the user has described their own problem before being sold to
+/// — but it is a smaller one, and worth knowing before adding a question here.
 enum QuizQuestion: String, CaseIterable, Codable, Identifiable {
     case morningShape
     case phoneLatency
@@ -15,18 +21,6 @@ enum QuizQuestion: String, CaseIterable, Codable, Identifiable {
     case minutes
 
     var id: String { rawValue }
-
-    var eyebrow: String {
-        switch self {
-        case .morningShape: "Where you are now"
-        case .phoneLatency: "Where you are now"
-        case .thieves: "What's in the way"
-        case .wants: "What you want back"
-        case .journalHistory: "Your history"
-        case .obstacle: "Your history"
-        case .minutes: "Your commitment"
-        }
-    }
 
     var title: String {
         switch self {
@@ -40,14 +34,10 @@ enum QuizQuestion: String, CaseIterable, Codable, Identifiable {
         }
     }
 
-    var hint: String? {
-        switch self {
-        case .thieves, .wants: "Choose any."
-        case .morningShape: nil
-        default: nil
-        }
-    }
-
+    /// Multi-select. Nothing says so in words: the rows carry an empty circle
+    /// where a single-select question carries nothing, and the footer says
+    /// "Pick at least one." until something is picked. A "Choose any." line
+    /// under the title as well was the same fact told three times.
     var allowsMultiple: Bool {
         self == .thieves || self == .wants
     }
@@ -57,7 +47,7 @@ enum QuizQuestion: String, CaseIterable, Codable, Identifiable {
         case .morningShape:
             [
                 .init("phone_in_bed", "Phone, before I'm out of bed", "iphone"),
-                .init("alarm_then_scroll", "Alarm, then straight to scrolling", "alarm"),
+                .init("alarm_then_scroll", "Alarm, then scrolling", "alarm"),
                 .init("coffee_then_phone", "Coffee first, phone soon after", "cup.and.saucer"),
                 .init("decent", "I've got a decent routine", "checkmark.seal")
             ]
@@ -130,7 +120,28 @@ struct QuizAnswers: Codable, Equatable {
     var selections: [String: [String]] = [:]
     var wakeHour: Int = 7
     var wakeMinute: Int = 0
+    var bedHour: Int = 22
+    var bedMinute: Int = 30
     var committed: Bool = false
+
+    init() {}
+
+    /// Hand-written so a missing key falls back to the default above rather
+    /// than throwing. Swift's synthesised decoder does not do this, and this
+    /// struct is both persisted in `UserDefaults` and carried inside
+    /// `SettingsPayload` — so a build that adds a field would otherwise fail to
+    /// decode every backup written before it, taking the whole settings blob
+    /// down with it. `bedHour` was the field that made this real.
+    init(from decoder: Decoder) throws {
+        let box = try decoder.container(keyedBy: CodingKeys.self)
+        name = try box.decodeIfPresent(String.self, forKey: .name) ?? ""
+        selections = try box.decodeIfPresent([String: [String]].self, forKey: .selections) ?? [:]
+        wakeHour = try box.decodeIfPresent(Int.self, forKey: .wakeHour) ?? 7
+        wakeMinute = try box.decodeIfPresent(Int.self, forKey: .wakeMinute) ?? 0
+        bedHour = try box.decodeIfPresent(Int.self, forKey: .bedHour) ?? 22
+        bedMinute = try box.decodeIfPresent(Int.self, forKey: .bedMinute) ?? 30
+        committed = try box.decodeIfPresent(Bool.self, forKey: .committed) ?? false
+    }
 
     func selected(_ question: QuizQuestion) -> [String] {
         selections[question.rawValue] ?? []
@@ -158,10 +169,30 @@ struct QuizAnswers: Codable, Equatable {
         selections[question.rawValue] = current
     }
 
-    /// Minutes the user said they could give, used to size the prompt set.
+    /// Minutes the user said they could give. Read by the plan and paywall
+    /// copy only — the page itself is the same five questions for everyone.
     var committedMinutes: Int {
         Int(selected(.minutes).first ?? "5") ?? 5
     }
+
+    /// In the user's own clock, 12- or 24-hour as their phone is set.
+    var wakeTimeLabel: String { Self.label(hour: wakeHour, minute: wakeMinute) }
+
+    /// Where the evening page lands by default: half an hour before bed, so it
+    /// happens while they are still up rather than as one more thing owed once
+    /// the light is off. The user retimes it on the evening sitting screen.
+    var suggestedEveningTime: (hour: Int, minute: Int) {
+        let minutes = (bedHour * 60 + bedMinute - 30 + 24 * 60) % (24 * 60)
+        return (minutes / 60, minutes % 60)
+    }
+
+    private static func label(hour: Int, minute: Int) -> String {
+        let date = Calendar.current.date(
+            bySettingHour: hour, minute: minute, second: 0, of: .now
+        )
+        return (date ?? .now).formatted(.dateTime.hour().minute())
+    }
+
 }
 
 // MARK: - The reflected-back plan
@@ -186,16 +217,19 @@ struct MorningPlan {
         let name = answers.name.trimmed
         let greeting = name.isEmpty ? "Your morning reset" : "\(name)'s morning reset"
 
+        // One line. Each of these used to carry a second sentence explaining
+        // what the app would do about it — which the four rows underneath say
+        // already, in more detail, with icons.
         let diagnosis: String
         switch answers.selected(.phoneLatency).first {
         case "instant":
-            diagnosis = "You reach for your phone before your feet hit the floor. \(AppConfig.appName) puts a page between you and the screen."
+            diagnosis = "You're on your phone before you're out of bed."
         case "under5":
-            diagnosis = "You're online within five minutes of waking. That's the window \(AppConfig.appName) takes back."
+            diagnosis = "You're online within five minutes of waking."
         case "under30":
-            diagnosis = "You get a short head start most mornings. \(AppConfig.appName) makes it deliberate instead of accidental."
+            diagnosis = "You get a short head start most mornings."
         default:
-            diagnosis = "You already protect your mornings. \(AppConfig.appName) gives that habit somewhere to land."
+            diagnosis = "You already protect your mornings."
         }
 
         var rows: [Row] = []
@@ -203,12 +237,18 @@ struct MorningPlan {
         // Counted off the page that actually gets installed, not guessed from
         // the minutes. The guess used to promise five questions to anyone who
         // picked ten minutes, and then hand them a three-question set.
-        let page = PromptPlan.make(from: answers)
-        let count = page.morning.count
+        let page = PromptTemplate.classicFive
+        let morning = page.seeds(for: .morning).count
+        let evening = page.seeds(for: .evening).count
         rows.append(Row(
             symbol: "text.alignleft",
-            title: "\(count) question\(count == 1 ? "" : "s") each morning",
-            detail: "\(page.morningDuration) of writing. Change any of them later in Settings."
+            title: "\(morning) question\(morning == 1 ? "" : "s") each morning",
+            detail: "\(page.duration(for: .morning)). Change them any time."
+        ))
+        rows.append(Row(
+            symbol: "moon.stars",
+            title: "\(evening) more before bed",
+            detail: page.duration(for: .evening)
         ))
 
         let thieves = answers.selected(.thieves)
@@ -218,29 +258,28 @@ struct MorningPlan {
             }
             rows.append(Row(
                 symbol: "lock",
-                title: "A gate on \(list(names))",
-                detail: "Shut until the page is written. No snooze, no skip."
+                title: "A gate on \(named(names))",
+                detail: "Nothing opens until it's written."
             ))
         } else {
             rows.append(Row(
                 symbol: "lock",
                 title: "A gate on your phone",
-                detail: "Nothing else opens until the page is written."
+                detail: "Nothing opens until it's written."
             ))
         }
 
-        let time = String(format: "%02d:%02d", answers.wakeHour, answers.wakeMinute)
         rows.append(Row(
             symbol: "alarm",
-            title: "An alarm at \(time)",
-            detail: "Rings through silent mode and Focus, then hands you the page."
+            title: "An alarm at \(answers.wakeTimeLabel)",
+            detail: "Rings through silent mode and Focus."
         ))
 
         if answers.has(.journalHistory, "didnt_stick") || answers.has(.obstacle, "forgot") {
             rows.append(Row(
                 symbol: "flame",
-                title: "A streak you can actually keep",
-                detail: "One line counts. The point is showing up, not writing well."
+                title: "A streak you can keep",
+                detail: "One line counts."
             ))
         }
 
@@ -260,6 +299,14 @@ struct MorningPlan {
             rows: rows,
             paywallHeadline: paywall
         )
+    }
+
+    /// The first two, then a count. Ticking every box on the thieves question
+    /// otherwise produced "a gate on social media, news, email and slack,
+    /// youtube and tiktok and games" as a heading.
+    private static func named(_ items: [String]) -> String {
+        guard items.count > 2 else { return list(items) }
+        return "\(items[0]), \(items[1]) and \(items.count - 2) more"
     }
 
     /// "a, b and c"

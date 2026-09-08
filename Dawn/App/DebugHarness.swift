@@ -10,9 +10,9 @@ import SwiftData
 enum DebugHarness {
     /// Forces RootView past the gate to a specific screen.
     enum Screen: String {
-        case welcome, onboarding, auth, paywall, account
+        case welcome, onboarding, auth, paywall, permissions, account
         case gate, journal, writing, complete
-        case home, history, settings, prompts, backup
+        case home, tomorrow, history, settings, prompts, backup
         /// The recovery-phrase hand-off, with a throwaway phrase. Reviewable
         /// on its own because in production it appears once per account.
         case recoveryPhrase, unlockBackup
@@ -73,7 +73,9 @@ enum DebugHarness {
     static func seedSampleData(into store: JournalStore) {
         guard wantsSampleData else { return }
         let calendar = Calendar.current
-        let prompts = store.prompts(for: .morning)
+        guard let block = store.blocks().first(where: \.gatesDay) ?? store.blocks().first
+        else { return }
+        let prompts = store.prompts(for: block)
         guard !prompts.isEmpty else { return }
 
         let gratitude = [
@@ -103,9 +105,8 @@ enum DebugHarness {
             let answers = zip(prompts, [gratitude[bucket], great[bucket], affirmations[bucket]])
                 .map { (prompt: $0, lines: $1) }
             store.record(
-                session: .morning,
+                block: block,
                 answers: Array(answers),
-                mood: [2, 3, 3, 4, 5][offset % 5],
                 on: date
             )
         }

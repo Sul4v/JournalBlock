@@ -1,16 +1,42 @@
 import SwiftUI
 import SwiftData
 
-/// Where the journal becomes the user's own. Built-in prompts can be reworded
-/// or switched off; custom ones can be anything.
+/// The shape of the user's day: as many blocks as they want, each at a time
+/// they choose, each with its own prompts.
+///
+/// This screen replaced a fixed two-section list — "Before the day" and "After
+/// the day" — which quietly made two decisions for everyone: that they wanted
+/// an evening reflection, and that they couldn't have a third sitting at any
+/// price. Both were the app's opinion wearing the clothes of a layout.
+///
+/// Deliberately read-only. Every control it once carried inline — a time
+/// picker, a name field, a menu, a switch per prompt — now lives one tap away
+/// in `BlockDetailView`, which leaves this screen able to answer the only
+/// question it should: what does my day look like?
 struct PromptLibraryView: View {
     @Environment(\.journalStore) private var store
+    @Environment(Preferences.self) private var prefs
+
+    @Query(
+        sort: [
+            SortDescriptor(\JournalBlock.hour),
+            SortDescriptor(\JournalBlock.minute),
+            SortDescriptor(\JournalBlock.order)
+        ]
+    ) private var blocks: [JournalBlock]
     @Query(sort: \JournalPrompt.order) private var prompts: [JournalPrompt]
 
-    @State private var editing: JournalPrompt?
-    @State private var isAdding = false
-    /// The prompt whose toggle was just refused, so the row can say why.
-    @State private var strandedPrompt: UUID?
+    /// The block being edited. Set by tapping a card.
+    @State private var opened: JournalBlock?
+    /// The creation flow. A sheet rather than a push, because making a block is
+    /// a different verb from editing one: it commits at the end, and closing it
+    /// leaves nothing behind.
+    @State private var isCreating = false
+    @State private var isEditing = false
+    /// The block whose minus was tapped, waiting on the confirmation.
+    @State private var pendingDelete: JournalBlock?
+    /// Set when deleting the last block standing was refused.
+    @State private var refusedDelete = false
 
     var body: some View {
         ZStack {
@@ -18,37 +44,22 @@ struct PromptLibraryView: View {
 
             ScrollView {
                 VStack(spacing: Theme.Space.lg) {
-                    ForEach(JournalPrompt.Session.allCases) { session in
-                        let group = prompts.filter { $0.session == session }
-                        if !group.isEmpty {
-                            VStack(spacing: Theme.Space.sm) {
-                                SectionHeading(
-                                    eyebrow: session.label,
-                                    title: session == .morning ? "Before the day" : "After the day"
-                                )
-                                ForEach(group) { prompt in
-                                    PromptRow(
-                                        prompt: prompt,
-                                        isStranded: strandedPrompt == prompt.id
-                                    ) {
-                                        editing = prompt
-                                    } onToggle: {
-                                        // Refused when it would leave the
-                                        // morning with no questions at all.
-                                        if store.setEnabled(!prompt.isEnabled, on: prompt) {
-                                            Haptics.tap(.light)
-                                        } else {
-                                            strandedPrompt = prompt.id
-                                            Haptics.warning()
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                    intro
+
+                    ForEach(blocks) { block in
+                        blockRow(block)
                     }
 
-                    GhostButton(title: "New prompt", systemImage: "plus") {
-                        isAdding = true
+                    // No label: the cards above are times of day, and a plus
+                    // under them doesn't need telling what it adds. `IconButton`
+                    // brings its own tap haptic and 44pt target.
+                    IconButton(
+                        systemName: "plus",
+                        accessibilityTitle: "Add a time of day",
+                        size: 16,
+                        diameter: Theme.Space.tapTarget
+                    ) {
+                        isCreating = true
                     }
                     .padding(.top, Theme.Space.xs)
 
@@ -62,250 +73,224 @@ struct PromptLibraryView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .principal) {
-                Text("Prompts")
+                Text("Your Blocks")
                     .font(Theme.Typography.serif(17, weight: .medium))
                     .foregroundStyle(Theme.Palette.ink)
             }
-        }
-        .sheet(item: $editing) { prompt in
-            PromptEditorView(prompt: prompt)
-        }
-        .sheet(isPresented: $isAdding) {
-            PromptEditorView(prompt: nil)
-        }
-    }
-}
 
-private struct PromptRow: View {
-    @Bindable var prompt: JournalPrompt
-    /// True when the user just tried to switch off the last morning question.
-    var isStranded: Bool = false
-    let onEdit: () -> Void
-    let onToggle: () -> Void
-
-    var body: some View {
-        GlassCard(
-            tint: prompt.isEnabled
-                ? Theme.Palette.emberSoft.opacity(0.20)
-                : Theme.Palette.ink.opacity(0.03),
-            padding: Theme.Space.md
-        ) {
-            HStack(alignment: .center, spacing: Theme.Space.sm) {
-                // The row itself opens the editor — a separate pencil button
-                // squeezed the prompt text into three-line wraps.
-                Button(action: onEdit) {
-                    HStack(alignment: .center, spacing: 8) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(prompt.title)
-                                .font(Theme.Typography.serif(17))
-                                .foregroundStyle(prompt.isEnabled ? Theme.Palette.ink : Theme.Palette.inkTertiary)
-                                .multilineTextAlignment(.leading)
-                                .fixedSize(horizontal: false, vertical: true)
-
-                            HStack(spacing: 6) {
-                                Text(styleLabel)
-                                if let source {
-                                    Text("·")
-                                    Text(source)
-                                }
-                            }
-                            .font(Theme.Typography.sans(11))
-                            .foregroundStyle(Theme.Palette.inkTertiary)
-
-                            // Only appears after the toggle refuses, so the
-                            // rule is explained at the moment it bites rather
-                            // than sitting on screen as a permanent warning.
-                            if isStranded {
-                                Text("Your morning needs at least one question.")
-                                    .font(Theme.Typography.sans(11))
-                                    .foregroundStyle(Theme.Palette.emberDeep)
-                                    .fixedSize(horizontal: false, vertical: true)
-                                    .transition(.opacity)
-                            }
-                        }
-
-                        Spacer(minLength: Theme.Space.xs)
-
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(Theme.Palette.inkTertiary)
+            ToolbarItem(placement: .topBarTrailing) {
+                // Hidden on the last block standing: it can't be deleted, so
+                // an Edit mode whose only control is a refusal is a button
+                // that does nothing.
+                if blocks.count > 1 {
+                    Button(isEditing ? "Done" : "Edit") {
+                        Haptics.tap(.light)
+                        withAnimation(Theme.Motion.settle) { isEditing.toggle() }
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .frame(minHeight: Theme.Space.tapTarget)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityElement(children: .combine)
-                .accessibilityHint("Edit this prompt")
-
-                // `labelsHidden()` left VoiceOver announcing "switch, on"
-                // with no way to tell which of five prompts it belonged to.
-                Toggle("", isOn: Binding(get: { prompt.isEnabled }, set: { _ in onToggle() }))
-                    .labelsHidden()
-                    .tint(Theme.Palette.ember)
-                    .accessibilityLabel(prompt.title)
-                    .accessibilityHint("Include this prompt in the session")
-            }
-        }
-        .animation(Theme.Motion.quick, value: isStranded)
-    }
-
-    private var styleLabel: String {
-        switch prompt.style {
-        case .freeform: "Open answer"
-        case let .lines(count): "\(count) line\(count == 1 ? "" : "s")"
-        }
-    }
-
-    /// Where this question came from, when it came from somewhere. A prompt the
-    /// user wrote says nothing — "Custom" would be labelling the normal case.
-    private var source: String? {
-        guard !prompt.originTemplateID.isEmpty else { return nil }
-        return PromptTemplate.template(id: prompt.originTemplateID)?.name
-    }
-}
-
-/// Create or edit a single prompt.
-struct PromptEditorView: View {
-    @Environment(\.journalStore) private var store
-    @Environment(\.dismiss) private var dismiss
-
-    let prompt: JournalPrompt?
-
-    @State private var title: String
-    @State private var hint: String
-    @State private var lineCount: Int
-    @State private var styleKind: PromptStyle.Kind
-    @State private var session: JournalPrompt.Session
-    @FocusState private var titleFocused: Bool
-
-    init(prompt: JournalPrompt?) {
-        self.prompt = prompt
-        _title = State(initialValue: prompt?.title ?? "")
-        _hint = State(initialValue: prompt?.hint ?? "")
-        _lineCount = State(initialValue: prompt?.style.slotCount ?? 1)
-        _styleKind = State(initialValue: prompt?.style.kind ?? .lines)
-        _session = State(initialValue: prompt?.session ?? .morning)
-    }
-
-    private var canSave: Bool { !title.trimmed.isEmpty }
-
-    var body: some View {
-        NavigationStack {
-            ZStack {
-                SkyBackground(phase: .sunrise, intensity: 0.6)
-
-                ScrollView {
-                    VStack(alignment: .leading, spacing: Theme.Space.lg) {
-                        field(label: "Prompt", text: $title, placeholder: "What are you looking forward to?")
-                            .focused($titleFocused)
-                        field(label: "Hint", text: $hint, placeholder: "Optional nudge under the question")
-
-                        VStack(alignment: .leading, spacing: Theme.Space.sm) {
-                            Text("Room to write").eyebrowStyle()
-                            // A list and a paragraph are different questions.
-                            // "Three things I'm grateful for" wants ruled
-                            // lines; "what's sitting on my chest" wants a box
-                            // that grows, and three stubby fields turn it into
-                            // a form. Without this control, editing a prompt
-                            // that shipped as open would silently flatten it.
-                            Picker("Answer", selection: $styleKind) {
-                                Text("Lines").tag(PromptStyle.Kind.lines)
-                                Text("Open answer").tag(PromptStyle.Kind.freeform)
-                            }
-                            .pickerStyle(.segmented)
-
-                            if styleKind == .lines {
-                                Picker("Lines", selection: $lineCount) {
-                                    ForEach(1...PromptStyle.maxLines, id: \.self) { Text("\($0)").tag($0) }
-                                }
-                                .pickerStyle(.segmented)
-                                .transition(.opacity)
-                            }
-                        }
-                        .animation(Theme.Motion.quick, value: styleKind)
-
-                        VStack(alignment: .leading, spacing: Theme.Space.sm) {
-                            Text("When").eyebrowStyle()
-                            Picker("When", selection: $session) {
-                                ForEach(JournalPrompt.Session.allCases) {
-                                    Text($0.label).tag($0)
-                                }
-                            }
-                            .pickerStyle(.segmented)
-                            .disabled(prompt?.isBuiltIn == true)
-                        }
-
-                        // Anything can be deleted now, template rows included —
-                        // the only thing protected is having a morning at all.
-                        if let prompt, !store.wouldStrandMorning(prompt) {
-                            GhostButton(title: "Delete prompt", systemImage: "trash", isNested: false) {
-                                store.deletePrompt(prompt)
-                                dismiss()
-                            }
-                            .padding(.top, Theme.Space.sm)
-                        }
-                    }
-                    .pageGutter()
-                    .padding(.top, Theme.Space.md)
-                }
-                .scrollIndicators(.hidden)
-            }
-            .navigationTitle(prompt == nil ? "New prompt" : "Edit prompt")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") { save() }.disabled(!canSave)
-                }
-            }
-            .onAppear {
-                if prompt == nil {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { titleFocused = true }
+                    .font(Theme.Typography.sans(16, weight: isEditing ? .semibold : .regular))
+                    .foregroundStyle(Theme.Palette.emberDeep)
                 }
             }
         }
-    }
-
-    private func field(label: String, text: Binding<String>, placeholder: String) -> some View {
-        VStack(alignment: .leading, spacing: Theme.Space.sm) {
-            Text(label).eyebrowStyle()
-            VStack(alignment: .leading, spacing: 8) {
-                TextField(
-                    "",
-                    text: text,
-                    prompt: Text(placeholder)
-                        .font(Theme.Typography.serif(19))
-                        .foregroundStyle(Theme.Palette.inkTertiary.opacity(0.7)),
-                    axis: .vertical
-                )
-                .font(Theme.Typography.serif(19))
-                .foregroundStyle(Theme.Palette.ink)
-                .tint(Theme.Palette.ember)
-
-                Rectangle().fill(Theme.Palette.rule).frame(height: 1)
-            }
+        // One tap on the minus is not enough on its own: this takes the
+        // block's prompts with it, and there is no way back.
+        .alert(
+            "Delete \(pendingDelete?.timeLabel ?? "")?",
+            isPresented: Binding(
+                get: { pendingDelete != nil },
+                set: { if !$0 { pendingDelete = nil } }
+            ),
+            presenting: pendingDelete
+        ) { block in
+            Button("Delete", role: .destructive) { delete(block) }
+            Button("Cancel", role: .cancel) {}
+        } message: { _ in
+            Text("This removes the block and its prompts. What you've already written stays in your entries.")
         }
+        // Deleting the last block is refused rather than allowed: a journal
+        // with nowhere to write is a state this screen can't get back out of.
+        .alert("Keep at least one block", isPresented: $refusedDelete) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Your journal needs somewhere to write.")
+        }
+        .navigationDestination(item: $opened) { block in
+            BlockDetailView(block: block)
+        }
+        .sheet(isPresented: $isCreating) {
+            let slot = store.nextBlockSlot()
+            // Straight back to the list, where the new card animates in. The
+            // flow has already asked the two questions the editor would;
+            // pushing into it would be handing back a screen they just filled.
+            NewBlockView(hour: slot.hour, minute: slot.minute)
+        }
+        // Times and reminder switches are edited on the next screen with no
+        // save button, so the schedule is rebuilt whenever any of them settles.
+        // This view stays mounted underneath, which makes it the one place that
+        // sees every block change without having to be told about it.
+        .onChange(of: blocks.count) { _, count in
+            if count <= 1 { isEditing = false }
+        }
+        .onChange(of: reminderFingerprint) { _, _ in rearmSchedules() }
     }
 
-    private func save() {
-        if let prompt {
-            prompt.title = title.trimmed
-            prompt.hint = hint.trimmed
-            prompt.style = .make(kind: styleKind, lineCount: lineCount)
-            if !prompt.isBuiltIn { prompt.session = session }
-            store.save()
-        } else {
-            store.addPrompt(
-                title: title.trimmed,
-                hint: hint.trimmed,
-                style: .make(kind: styleKind, lineCount: lineCount),
-                session: session
+    /// Re-points both schedules at the times the blocks now hold. Without it
+    /// an alarm goes on ringing at the hour a block used to be.
+    ///
+    /// Split out of the `onChange` it used to live inside: the closure had
+    /// grown past what the type checker would swallow in one expression.
+    private func rearmSchedules() {
+        let blocks = self.blocks
+        let wantsAlarm = prefs.gateMode == .alarm
+        // Only the blocks with something to ask can ring.
+        let ringable = store.activeBlocks()
+        let owed = store.unwrittenBlockIDs()
+        Task { await ReminderService.shared.reschedule(for: blocks) }
+        Task {
+            await AlarmService.shared.reschedule(
+                for: ringable,
+                enabled: wantsAlarm,
+                owed: owed
             )
         }
-        Haptics.success()
-        dismiss()
+    }
+
+    /// A card, and — in edit mode — the control that removes it.
+    ///
+    /// Hand-rolled rather than a `List`'s own edit control, which is welded to
+    /// the leading edge and can't be moved. An `HStack` puts the minus on the
+    /// trailing side instead, and centres it on the card by default alignment
+    /// however tall that card grows.
+    private func blockRow(_ block: JournalBlock) -> some View {
+        HStack(spacing: Theme.Space.sm) {
+            Button {
+                opened = block
+            } label: {
+                BlockCard(
+                    block: block,
+                    prompts: prompts.filter { $0.blockID == block.id },
+                    isEditing: isEditing
+                )
+            }
+            .buttonStyle(.plain)
+            // Edit mode is for removing blocks, not entering them — the same
+            // reason the chevron goes while it's on. Hit testing rather than
+            // `disabled`, which greys the card's contents out as though the
+            // block itself were unavailable.
+            .allowsHitTesting(!isEditing)
+
+            if isEditing {
+                Button {
+                    Haptics.tap(.light)
+                    pendingDelete = block
+                } label: {
+                    Image(systemName: "minus.circle.fill")
+                        .font(.system(size: 25))
+                        // Palette rendering so the bar reads white on red
+                        // rather than punching a hole through to the sky.
+                        .symbolRenderingMode(.palette)
+                        .foregroundStyle(Theme.Palette.canvas, Theme.Palette.danger)
+                        .frame(
+                            width: Theme.Space.tapTarget,
+                            height: Theme.Space.tapTarget
+                        )
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                // Grows out of nothing on the trailing edge, rather than
+                // appearing fully formed the instant Edit is pressed.
+                .transition(
+                    .scale(scale: 0.4, anchor: .trailing).combined(with: .opacity)
+                )
+                .accessibilityLabel("Delete \(block.timeLabel)")
+            }
+        }
+    }
+
+    /// Refused for the last block standing — the one rule this screen
+    /// enforces, and the reason `deleteBlock` reports a result at all.
+    private func delete(_ block: JournalBlock) {
+        if store.deleteBlock(block) {
+            Haptics.success()
+        } else {
+            refusedDelete = true
+            Haptics.warning()
+        }
+    }
+
+    private var intro: some View {
+        Text("Your prompts, grouped by when you answer them. Add as many times of day as you like.")
+            .font(Theme.Typography.sans(14))
+            .foregroundStyle(Theme.Palette.inkSecondary)
+            .lineSpacing(3)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Changes worth rescheduling notifications for, and nothing else — a
+    /// renamed block or a reworded prompt shouldn't churn the whole schedule.
+    private var reminderFingerprint: String {
+        blocks.map { "\($0.id)-\($0.hour):\($0.minute)-\($0.remindersEnabled)" }.joined()
+    }
+}
+
+// MARK: - One block
+
+/// A block at a glance: when it is, what it's called, and what it asks.
+private struct BlockCard: View {
+    let block: JournalBlock
+    let prompts: [JournalPrompt]
+    /// Hides the chevron while the list is being edited: nothing is navigating
+    /// anywhere, so an arrow pointing onwards is a promise the card isn't
+    /// keeping.
+    var isEditing = false
+
+    var body: some View {
+        GlassCard {
+            VStack(alignment: .leading, spacing: Theme.Space.md) {
+                HStack(alignment: .center, spacing: Theme.Space.sm) {
+                    // The time is the block's whole identity now, so it reads
+                    // as the heading it has become rather than as a chip
+                    // labelling a name beside it.
+                    Text(block.timeLabel)
+                        .font(Theme.Typography.serif(20))
+                        .foregroundStyle(Theme.Palette.ink)
+                        .lineLimit(1)
+
+                    Spacer(minLength: Theme.Space.xs)
+
+                    if !isEditing {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(Theme.Palette.inkTertiary)
+                            .transition(.opacity)
+                    }
+                }
+
+                if enabled.isEmpty {
+                    Text("No prompts yet")
+                        .font(Theme.Typography.sans(13))
+                        .foregroundStyle(Theme.Palette.inkTertiary)
+                } else {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(enabled) { prompt in
+                            Text(prompt.title)
+                                .font(Theme.Typography.serif(16))
+                                .foregroundStyle(Theme.Palette.inkSecondary)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                }
+
+            }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityHint("Edit this block")
+    }
+
+    private var enabled: [JournalPrompt] {
+        prompts.filter(\.isEnabled)
     }
 }

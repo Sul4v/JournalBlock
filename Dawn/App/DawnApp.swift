@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import UserNotifications
 
 @main
 struct DawnApp: App {
@@ -14,13 +15,15 @@ struct DawnApp: App {
     init() {
         do {
             container = try ModelContainer(
-                for: JournalEntry.self, JournalPrompt.self, PromptAnswer.self
+                for: JournalEntry.self, JournalPrompt.self, PromptAnswer.self,
+                JournalBlock.self
             )
         } catch {
             // A journal that can't open its own storage has nothing to show.
             // Fall back to memory so the app still launches and can report it.
             container = try! ModelContainer(
                 for: JournalEntry.self, JournalPrompt.self, PromptAnswer.self,
+                JournalBlock.self,
                 configurations: ModelConfiguration(isStoredInMemoryOnly: true)
             )
         }
@@ -64,6 +67,24 @@ struct DawnApp: App {
                     }
                 }
                 .onOpenURL { url in
+                    // A tap on the shield's handoff notification. The block
+                    // it names is the one the gate is already holding, so there
+                    // is no destination to compute — but there is a tab to
+                    // choose. Someone who just pressed "Write it now" must land
+                    // on Today looking at the sitting they owe, not on whatever
+                    // tab they happened to leave open last time.
+                    //
+                    // This also has to claim the URL before the auth handler
+                    // below treats it as a Supabase callback, and clear the
+                    // banner the shield left behind.
+                    if GateBridge.blockID(fromDeepLink: url) != nil {
+                        UNUserNotificationCenter.current()
+                            .removeDeliveredNotifications(
+                                withIdentifiers: [GateBridge.handoffNotificationID]
+                            )
+                        NotificationCenter.default.post(name: .dawnBlockHandoff, object: nil)
+                        return
+                    }
                     // Google owns its own scheme; everything else is a
                     // Supabase confirmation or recovery link.
                     if GoogleSignInService.handle(url) { return }

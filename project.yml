@@ -33,6 +33,8 @@ targets:
     platform: iOS
     sources:
       - path: Dawn
+      # Compiled into the app *and* every extension. See Shared/GateBridge.swift.
+      - path: Shared
     dependencies:
       - package: Supabase
         product: Supabase
@@ -40,6 +42,10 @@ targets:
         product: RevenueCat
       - package: GoogleSignIn
         product: GoogleSignIn
+      # Embeds the three Screen Time extensions in the app bundle.
+      - target: ShieldConfiguration
+      - target: ShieldAction
+      - target: DeviceActivityMonitor
     info:
       path: Config/Info.plist
       properties:
@@ -55,7 +61,7 @@ targets:
         UILaunchScreen:
           UIColorName: LaunchCanvas
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
-        NSAlarmKitUsageDescription: "Dawn uses alarms to wake you for your morning journal."
+        NSAlarmKitUsageDescription: "JournalBlock rings an alarm at the sitting you asked it to wake you for."
         ITSAppUsesNonExemptEncryption: false
         CFBundleURLTypes:
           # Supabase sends confirmation and password-reset links here, so the
@@ -83,4 +89,95 @@ targets:
         CODE_SIGN_ENTITLEMENTS: Dawn/Dawn.entitlements
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        SWIFT_STRICT_CONCURRENCY: minimal
+
+  # --- Screen Time --------------------------------------------------------
+  #
+  # Three separate extensions because the system launches them for three
+  # different reasons: to draw a shield, to answer a tap on one, and to re-arm
+  # the shield on a schedule while the app isn't running. All three need
+  # `com.apple.developer.family-controls` and the shared app group.
+
+  ShieldConfiguration:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: ShieldConfiguration
+      - path: Shared
+    info:
+      path: ShieldConfiguration/Info.plist
+      # XcodeGen *generates* this plist, so NSExtension has to be declared here
+      # rather than hand-written into the file — anything written there is
+      # overwritten on the next `xcodegen generate`, and an extension with no
+      # NSExtension dict is one the system will never launch.
+      properties:
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.ManagedSettingsUI.shield-configuration-service
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).ShieldConfigurationProvider
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.sulav.journalblock.ShieldConfiguration
+        PRODUCT_NAME: ShieldConfiguration
+        MARKETING_VERSION: "0.1"
+        CURRENT_PROJECT_VERSION: "1"
+        TARGETED_DEVICE_FAMILY: "1"
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: 6LYZDNCM4M
+        CODE_SIGN_ENTITLEMENTS: ShieldConfiguration/ShieldConfiguration.entitlements
+        SWIFT_STRICT_CONCURRENCY: minimal
+
+  ShieldAction:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: ShieldAction
+      - path: Shared
+    info:
+      path: ShieldAction/Info.plist
+      # XcodeGen *generates* this plist, so NSExtension has to be declared here
+      # rather than hand-written into the file — anything written there is
+      # overwritten on the next `xcodegen generate`, and an extension with no
+      # NSExtension dict is one the system will never launch.
+      properties:
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.ManagedSettings.shield-action-service
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).ShieldActionHandler
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.sulav.journalblock.ShieldAction
+        PRODUCT_NAME: ShieldAction
+        MARKETING_VERSION: "0.1"
+        CURRENT_PROJECT_VERSION: "1"
+        TARGETED_DEVICE_FAMILY: "1"
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: 6LYZDNCM4M
+        CODE_SIGN_ENTITLEMENTS: ShieldAction/ShieldAction.entitlements
+        SWIFT_STRICT_CONCURRENCY: minimal
+
+  DeviceActivityMonitor:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: DeviceActivityMonitor
+      - path: Shared
+    info:
+      path: DeviceActivityMonitor/Info.plist
+      # XcodeGen *generates* this plist, so NSExtension has to be declared here
+      # rather than hand-written into the file — anything written there is
+      # overwritten on the next `xcodegen generate`, and an extension with no
+      # NSExtension dict is one the system will never launch.
+      properties:
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.deviceactivity.monitor-extension
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).GateMonitor
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.sulav.journalblock.DeviceActivityMonitor
+        PRODUCT_NAME: DeviceActivityMonitor
+        MARKETING_VERSION: "0.1"
+        CURRENT_PROJECT_VERSION: "1"
+        TARGETED_DEVICE_FAMILY: "1"
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: 6LYZDNCM4M
+        CODE_SIGN_ENTITLEMENTS: DeviceActivityMonitor/DeviceActivityMonitor.entitlements
         SWIFT_STRICT_CONCURRENCY: minimal

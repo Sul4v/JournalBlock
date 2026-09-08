@@ -30,7 +30,6 @@ struct DeleteAccountView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: Theme.Space.lg) {
                         VStack(alignment: .leading, spacing: Theme.Space.sm) {
-                            Text("This cannot be undone").eyebrowStyle(Theme.Palette.danger)
                             Text("Delete your account")
                                 .font(Theme.Typography.serif(30))
                                 .foregroundStyle(Theme.Palette.ink)

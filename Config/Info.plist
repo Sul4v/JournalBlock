@@ -46,7 +46,7 @@
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>NSAlarmKitUsageDescription</key>
-	<string>Dawn uses alarms to wake you for your morning journal.</string>
+	<string>JournalBlock rings an alarm at the sitting you asked it to wake you for.</string>
 	<key>UILaunchScreen</key>
 	<dict>
 		<key>UIColorName</key>

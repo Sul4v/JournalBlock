@@ -18,18 +18,13 @@ struct HistoryView: View {
                     emptyState
                 } else {
                     ScrollView {
-                        LazyVStack(spacing: Theme.Space.sm) {
+                        LazyVStack(alignment: .leading, spacing: Theme.Space.lg) {
                             masthead
-                                .padding(.bottom, Theme.Space.xs)
 
-                            ForEach(written) { entry in
-                                NavigationLink {
-                                    EntryDetailView(entry: entry)
-                                } label: {
-                                    EntryRow(entry: entry)
-                                }
-                                .buttonStyle(.plain)
+                            ForEach(months, id: \.start) { month in
+                                monthSection(month)
                             }
+
                             Color.clear.frame(height: Theme.Space.xxl)
                         }
                         .pageGutter()
@@ -37,6 +32,7 @@ struct HistoryView: View {
                     }
                     .scrollIndicators(.hidden)
                     .scrollEdgeEffectStyle(.soft, for: .top)
+                    .softTopEdge()
                 }
             }
             .toolbar(.hidden, for: .navigationBar)
@@ -46,16 +42,99 @@ struct HistoryView: View {
     /// Matches the Home masthead so the app keeps one typographic voice
     /// instead of borrowing UIKit's bold sans large title.
     private var masthead: some View {
-        VStack(alignment: .leading, spacing: Theme.Space.xs) {
-            Text("\(written.count) day\(written.count == 1 ? "" : "s") written")
-                .eyebrowStyle()
+        // Title left, count right — the same masthead shape Today uses for its
+        // date and streak, so the two tabs open the same way.
+        HStack(alignment: .center, spacing: Theme.Space.md) {
             Text("Entries")
                 .font(Theme.Typography.serif(34))
                 .foregroundStyle(Theme.Palette.ink)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityAddTraits(.isHeader)
+
+            Text(tally)
+                .font(Theme.Typography.sans(14))
+                .foregroundStyle(Theme.Palette.inkTertiary)
+                .fixedSize()
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(.isHeader)
+    }
+
+    /// "17 days". One number, because a day is an entry is a page — every row
+    /// in this list is all three, and a second figure counting the same thing
+    /// under a different name would only invite the reader to look for the
+    /// difference.
+    private var tally: String {
+        let days = written.count
+        return "\(days) \(days == 1 ? "day" : "days")"
+    }
+
+    // MARK: - Months
+
+    /// The written days, bucketed by month, newest first.
+    ///
+    /// A flat list of dates gave every day its own glass card holding two
+    /// words, which made a month of writing look like a column of empty
+    /// containers. Grouping gives the page a rhythm and lets each row drop the
+    /// month it repeats — a day inside "September" only has to say "8".
+    private var months: [(start: Date, label: String, entries: [JournalEntry])] {
+        let calendar = Calendar.current
+        var order: [Date] = []
+        var buckets: [Date: [JournalEntry]] = [:]
+
+        for entry in written {
+            let start = calendar.dateInterval(of: .month, for: entry.day)?.start
+                ?? entry.day
+            if buckets[start] == nil { order.append(start) }
+            buckets[start, default: []].append(entry)
+        }
+
+        return order.map { start in
+            (start, monthLabel(start), buckets[start] ?? [])
+        }
+    }
+
+    /// The year only when it isn't this one, so a recent month stays short and
+    /// one from two Septembers ago is still unambiguous.
+    private func monthLabel(_ date: Date) -> String {
+        let calendar = Calendar.current
+        let isThisYear = calendar.component(.year, from: date)
+            == calendar.component(.year, from: .now)
+        return isThisYear
+            ? date.formatted(.dateTime.month(.wide))
+            : date.formatted(.dateTime.month(.wide).year())
+    }
+
+    private func monthSection(
+        _ month: (start: Date, label: String, entries: [JournalEntry])
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(month.label).eyebrowStyle(Theme.Palette.emberDeep)
+                Spacer(minLength: Theme.Space.sm)
+                Text("\(month.entries.count)")
+                    .font(Theme.Typography.sans(12, weight: .medium))
+                    .monospacedDigit()
+                    .foregroundStyle(Theme.Palette.inkTertiary)
+            }
+            .padding(.bottom, Theme.Space.sm)
+
+            ForEach(Array(month.entries.enumerated()), id: \.element.id) { index, entry in
+                NavigationLink {
+                    EntryDetailView(entry: entry)
+                } label: {
+                    EntryRow(entry: entry)
+                }
+                .buttonStyle(.plain)
+
+                // Hairlines between days rather than a card around each. Nine
+                // rounded rectangles holding one date apiece read as packaging;
+                // a ruled column reads as an index.
+                if index < month.entries.count - 1 {
+                    Rectangle()
+                        .fill(Theme.Palette.rule)
+                        .frame(height: 1)
+                }
+            }
+        }
     }
 
     private var emptyState: some View {
@@ -76,67 +155,31 @@ struct HistoryView: View {
 private struct EntryRow: View {
     let entry: JournalEntry
 
-    private var preview: String {
-        entry.allLines.first ?? ""
-    }
-
     var body: some View {
-        GlassCard(padding: Theme.Space.md) {
-            HStack(alignment: .top, spacing: Theme.Space.md) {
-                VStack(spacing: 1) {
-                    Text(entry.day.formatted(.dateTime.day()))
-                        .font(Theme.Typography.sans(22, weight: .light))
-                        .foregroundStyle(Theme.Palette.ink)
-                    Text(entry.day.formatted(.dateTime.month(.abbreviated)))
-                        .font(Theme.Typography.sans(10, weight: .medium))
-                        .foregroundStyle(Theme.Palette.inkTertiary)
-                        .textCase(.uppercase)
-                }
-                .frame(minWidth: 40)
+        HStack(alignment: .firstTextBaseline, spacing: Theme.Space.md) {
+            // The day, big enough to scan down the column, with the weekday
+            // beside it — which is the thing you actually remember a day by.
+            Text(entry.day.formatted(.dateTime.day()))
+                .font(Theme.Typography.serif(22))
+                .monospacedDigit()
+                .foregroundStyle(Theme.Palette.ink)
+                .frame(minWidth: 30, alignment: .leading)
 
-                VStack(alignment: .leading, spacing: 5) {
-                    Text(preview)
-                        .font(Theme.Typography.serif(16))
-                        .foregroundStyle(Theme.Palette.ink)
-                        .lineLimit(2)
-                        .multilineTextAlignment(.leading)
+            Text(entry.day.formatted(.dateTime.weekday(.wide)))
+                .font(Theme.Typography.sans(15))
+                .foregroundStyle(Theme.Palette.inkSecondary)
 
-                    HStack(spacing: 8) {
-                        if entry.isMorningComplete {
-                            Badge(symbol: "sun.horizon", text: "Morning")
-                        }
-                        if entry.isEveningComplete {
-                            Badge(symbol: "moon.stars", text: "Evening")
-                        }
-                    }
-                }
+            Spacer(minLength: 0)
 
-                Spacer(minLength: 0)
-
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Theme.Palette.inkTertiary)
-                    .padding(.top, 4)
-            }
+            Image(systemName: "chevron.right")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Theme.Palette.inkTertiary)
         }
-        // One row, one VoiceOver element — not four fragments.
+        .padding(.vertical, Theme.Space.sm)
+        .frame(minHeight: Theme.Space.tapTarget)
+        .contentShape(Rectangle())
+        // One row, one VoiceOver element — not three fragments.
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
-    }
-}
-
-private struct Badge: View {
-    let symbol: String
-    let text: String
-
-    var body: some View {
-        HStack(spacing: 3) {
-            Image(systemName: symbol).font(.system(size: 9))
-            Text(text).font(Theme.Typography.sans(10, weight: .medium))
-        }
-        .foregroundStyle(Theme.Palette.inkSecondary)
-        .padding(.horizontal, 7)
-        .padding(.vertical, 3)
-        .background(Capsule().fill(Theme.Palette.ink.opacity(0.05)))
     }
 }

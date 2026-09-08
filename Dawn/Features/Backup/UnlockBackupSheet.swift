@@ -20,7 +20,7 @@ struct UnlockBackupSheet: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: Theme.Space.lg) {
-                    SectionHeading(eyebrow: "Restore", title: "Enter your phrase")
+                    SectionHeading(title: "Enter your phrase")
 
                     Text("The twelve words you saved when you turned on backup. Order matters; capitals and punctuation don't.")
                         .font(Theme.Typography.sans(15))

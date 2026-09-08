@@ -25,7 +25,7 @@ struct AuthFlowView: View {
     enum Stage { case chooser, email, confirm }
 
     /// Someone who has signed in before and then signed out is a returning
-    /// user, not a new lead. Opening on "Save your morning plan" reads as if
+    /// user, not a new lead. Opening on "Save your plan" reads as if
     /// the app has forgotten them.
     /// Set when this was reached from the welcome screen, so the chooser can
     /// offer a way back out. Nil when auth is the only thing standing between
@@ -114,20 +114,13 @@ struct AuthFlowView: View {
 
     private var backRow: some View {
         HStack {
-            Button {
-                Haptics.tap(.light)
+            IconButton(systemName: "chevron.left", accessibilityTitle: "Back") {
                 focus = nil
                 errorMessage = nil
                 // From the email form, back means the chooser. From the
                 // chooser, it means out of auth entirely.
                 if stage == .chooser { onBack?() } else { stage = .chooser }
-            } label: {
-                Image(systemName: "chevron.left")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(Theme.Palette.inkSecondary)
-                    .frame(width: 22, height: 22)
             }
-            .buttonStyle(.glass)
             Spacer()
         }
         .pageGutter()
@@ -136,9 +129,6 @@ struct AuthFlowView: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: Theme.Space.sm) {
-            if let eyebrow {
-                Text(eyebrow).eyebrowStyle()
-            }
             Text(headline)
                 .font(Theme.Typography.serif(32))
                 .foregroundStyle(Theme.Palette.ink)
@@ -154,19 +144,12 @@ struct AuthFlowView: View {
         }
     }
 
-    /// Nil where it would only restate the headline.
-    private var eyebrow: String? {
-        if stage == .confirm { return nil }
-        if stage == .email { return "With email" }
-        return mode == .signUp ? "Almost there" : nil
-    }
-
     private var headline: String {
         switch (stage, mode) {
         case (.email, .signUp): "Create your account"
         case (.email, .signIn): "Sign in with email"
         case (_, .signIn): "Welcome back"
-        case (_, .signUp): name.isEmpty ? "Save your morning plan" : "Save \(name)'s plan"
+        case (_, .signUp): name.isEmpty ? "Save your plan" : "Save \(name)'s plan"
         }
     }
 
@@ -251,7 +234,6 @@ struct AuthFlowView: View {
                 .foregroundStyle(Theme.Palette.ember)
 
             VStack(alignment: .leading, spacing: Theme.Space.sm) {
-                Text("Check your inbox").eyebrowStyle()
                 Text("Confirm your email")
                     .font(Theme.Typography.serif(32))
                     .foregroundStyle(Theme.Palette.ink)

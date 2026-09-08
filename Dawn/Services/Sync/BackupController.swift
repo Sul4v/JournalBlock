@@ -254,6 +254,9 @@ final class BackupController {
         // it cannot read, which is the one state that breaks sync permanently.
         try await client.deleteAllEntries(for: userID)
         try await client.deleteSettings(for: userID)
+        // Every row is gone, so any outstanding per-day deletions are moot —
+        // and left behind they would go on hiding days from the next pull.
+        pendingDeletions = []
         try await client.replaceKeyWrapping(
             BackupClient.KeyRow(
                 userID: userID,
@@ -313,7 +316,11 @@ final class BackupController {
     private func syncSettings(store: JournalStore, prefs: Preferences, key: SymmetricKey) async throws {
         guard let client, let userID else { return }
 
-        let local = SettingsPayload(prompts: store.promptSnapshots(), settings: prefs.backupSnapshot)
+        let local = SettingsPayload(
+            prompts: store.promptSnapshots(),
+            settings: prefs.backupSnapshot,
+            blocks: store.blockSnapshots()
+        )
         let record = SettingsSyncRecord.load(for: userID)
         let remoteRow = try await client.fetchSettings(for: userID)
 
@@ -340,7 +347,7 @@ final class BackupController {
             let payload = try SettingsPayload.decoder.decode(
                 SettingsPayload.self, from: JournalCrypto.open(blob, using: key)
             )
-            store.applyPrompts(payload.prompts)
+            store.applyPrompts(payload.prompts, blocks: payload.blocks)
             prefs.apply(payload.settings)
             SettingsSyncRecord(fingerprint: payload.fingerprint, syncedAt: stamp).save(for: userID)
         }
@@ -374,6 +381,63 @@ final class BackupController {
     /// Conflicts are settled per day by `updatedAt`, last write wins. That is
     /// the right call for a journal used on one phone at a time; it would not
     /// be for something genuinely concurrent.
+    // MARK: - Deleted days
+
+    /// Days the user deleted locally that the server may still hold.
+    ///
+    /// Kept on disk rather than in memory because the delete has to survive the
+    /// request failing — offline, locked, or signed out. Until the row is gone
+    /// from the server, `sync` would pull the day straight back down, so these
+    /// are also what the pull skips over.
+    private var pendingDeletions: Set<String> {
+        get {
+            guard let userID else { return [] }
+            let stored = UserDefaults.standard.stringArray(forKey: Self.deletionsKey(userID))
+            return Set(stored ?? [])
+        }
+        set {
+            guard let userID else { return }
+            let key = Self.deletionsKey(userID)
+            if newValue.isEmpty {
+                UserDefaults.standard.removeObject(forKey: key)
+            } else {
+                UserDefaults.standard.set(Array(newValue), forKey: key)
+            }
+        }
+    }
+
+    private static func deletionsKey(_ userID: String) -> String {
+        "backup.deleted.days.\(userID)"
+    }
+
+    /// Tells backup that a day is gone for good, and tries to remove it from
+    /// the server now. A failure here is not surfaced: the day is already gone
+    /// from this device, and the next sync retries the removal.
+    func forget(day: Date) {
+        guard userID != nil else { return }
+        pendingDeletions.insert(DayKey.string(from: day))
+        Task { await flushDeletions() }
+    }
+
+    /// Sends every outstanding deletion, dropping each one only once the server
+    /// has confirmed it.
+    private func flushDeletions() async {
+        guard let client, let userID else { return }
+        var outstanding = pendingDeletions
+        guard !outstanding.isEmpty else { return }
+
+        for day in outstanding {
+            do {
+                try await client.deleteEntry(for: userID, day: day)
+                outstanding.remove(day)
+            } catch {
+                // Leave this one and everything after it for the next sync.
+                break
+            }
+        }
+        pendingDeletions = outstanding
+    }
+
     func sync(store: JournalStore, prefs: Preferences = .shared) async throws {
         guard let client else { throw BackupFailure.notConfigured }
         guard let userID, let key = dataKey, status == .ready else {
@@ -385,11 +449,17 @@ final class BackupController {
         defer { isWorking = false }
 
         do {
+            // Before anything else: a day the user deleted must not be fetched
+            // back down while its row is still up there.
+            await flushDeletions()
+            let deleted = pendingDeletions
+
             let rows = try await client.fetchEntries(for: userID)
 
             // Pull
             var remoteStamps: [Date: Date] = [:]
             for row in rows {
+                guard !deleted.contains(row.day) else { continue }
                 guard
                     let day = DayKey.date(from: row.day),
                     let stamp = PostgresTimestamp.date(from: row.updatedAt)

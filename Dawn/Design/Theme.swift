@@ -91,8 +91,8 @@ extension Theme {
         // "raised" on a dark ground — a drop shadow on near-black is invisible.
         // In light mode the same ramp runs the other way: paper, then recessed.
 
-        /// The base the whole app sits on.
-        static let canvas = Color.dynamic(light: 0xFBF7F1, dark: 0x17130F)
+        /// Neutral ivory under the daylight wash. Keep LaunchCanvas in step.
+        static let canvas = Color.dynamic(light: 0xFAF9F6, dark: 0x17130F)
 
         /// A recess *below* the canvas — inset wells, pressed rows.
         static let canvasSunk = Color.dynamic(light: 0xF4ECE2, dark: 0x100D0A)
@@ -270,8 +270,29 @@ extension Theme {
         /// Standard page gutter.
         static let gutter: CGFloat = 28
 
-        /// The smallest a control is allowed to be, per HIG.
+        /// The smallest a control is allowed to be, per HIG. A tap target,
+        /// not a drawing size — see `iconControl`.
         static let tapTarget: CGFloat = 44
+
+        /// The status bar strip a scrolling page fades out under, read from
+        /// the window rather than from a `GeometryReader`: the reader inside
+        /// a scroll view's mask sits in space the scroll view has already
+        /// consumed, so it reports no inset at all. Falls back to the classic
+        /// 20pt bar if there is no window yet.
+        @MainActor
+        static var statusBarStrip: CGFloat {
+            UIApplication.shared.connectedScenes
+                .compactMap { $0 as? UIWindowScene }
+                .flatMap(\.windows)
+                .first { $0.isKeyWindow }?
+                .safeAreaInsets.top ?? 20
+        }
+
+        /// The visible circle behind an icon-only control. Smaller than the
+        /// tap target on purpose: chrome should read as chrome, and a back
+        /// chevron drawn at the full 44pt looks like a button that thinks it
+        /// is the subject of the screen.
+        static let iconControl: CGFloat = 36
     }
 
     enum Radius {
@@ -330,7 +351,7 @@ extension Theme {
 // MARK: - Text styling shortcuts
 
 extension View {
-    /// Wide-tracked uppercase label used above section headings.
+    /// Wide-tracked uppercase label used for field labels and small markers.
     func eyebrowStyle(_ color: Color = Theme.Palette.inkTertiary) -> some View {
         self.font(Theme.Typography.eyebrow)
             .tracking(1.6)
@@ -340,6 +361,41 @@ extension View {
 
     func pageGutter() -> some View {
         self.padding(.horizontal, Theme.Space.gutter)
+    }
+
+    /// Dissolves a scrolling page into the sky as it passes under the status
+    /// bar, so nothing ever sits hard against the clock and battery.
+    ///
+    /// `scrollEdgeEffectStyle(.soft:)` alone doesn't get there on these
+    /// screens: with the navigation bar hidden there is no bar for the system
+    /// effect to sit under, and a blur that thin leaves a 34pt serif masthead
+    /// perfectly legible on top of the status bar. Masking the scroll view
+    /// fades the content out instead of softening it — the read the system
+    /// effect is going for, over the same strip it would have used.
+    func softTopEdge() -> some View {
+        self.mask(alignment: .top) {
+            VStack(spacing: 0) {
+                LinearGradient(
+                    stops: [
+                        .init(color: .black.opacity(0), location: 0),
+                        .init(color: .black.opacity(0.45), location: 0.6),
+                        .init(color: .black, location: 1)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                // The status bar strip, plus a little run-out below it so the
+                // last of the fade lands on empty page rather than clipping
+                // the top of the masthead's caps.
+                .frame(height: Theme.Space.statusBarStrip + Theme.Space.sm)
+
+                Color.black
+            }
+            // The band has to start at the physical top of the screen. Left
+            // inside the safe area it would begin below the status bar and
+            // dissolve the masthead while the page is sitting still.
+            .ignoresSafeArea()
+        }
     }
 
     /// Grows a control's hit area to the 44×44pt HIG minimum without changing

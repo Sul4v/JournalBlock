@@ -21,7 +21,7 @@ struct RecoveryPhraseSheet: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: Theme.Space.lg) {
-                    SectionHeading(eyebrow: "Keep these safe", title: "Your recovery phrase")
+                    SectionHeading(title: "Your recovery phrase")
 
                     Text("These twelve words are the only thing that can unlock your journal on a new phone. We don't have a copy, so we can't send them to you again or reset them for you.")
                         .font(Theme.Typography.sans(15))

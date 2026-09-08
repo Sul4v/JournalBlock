@@ -3,16 +3,16 @@ import SwiftData
 
 /// A question the user answers.
 ///
-/// Installed from a `PromptTemplate` — the app picks one from the quiz — and
-/// then owned outright by the user, who can reword it, swap it for another
-/// phrasing of the same role, switch it off, reorder it, or delete it.
+/// Installed from a `PromptTemplate` — every new account starts on the same
+/// one — and then owned outright by the user, who can reword it, swap it for
+/// another phrasing of the same role, switch it off, reorder it, or delete it.
 ///
 /// Note what is *not* here: no notion of a prompt being sacred. The old model
 /// made template prompts undeletable so the app could never be left with
 /// nothing to ask. That protected the wrong thing — the invariant worth holding
-/// is "at least one morning question exists", not "these five rows are
-/// immortal", and it lives in `JournalStore` where it can be enforced across
-/// every mutation path. See `JournalStore.wouldStrandMorning`.
+/// is "a block that locks the phone has at least one question", not "these five
+/// rows are immortal", and it lives in `JournalStore` where it can be enforced
+/// across every mutation path. See `JournalStore.wouldStrandGate`.
 @Model
 final class JournalPrompt {
     #Index<JournalPrompt>([\.order])
@@ -31,8 +31,18 @@ final class JournalPrompt {
     /// Raw value of `PromptRole`. What the question is *for*, which is what
     /// the swap sheet offers alternatives from.
     var roleRaw: String = PromptRole.open.rawValue
-    /// Raw value of `Session`. Stored as String so adding sessions later is non-breaking.
+    /// Raw value of `Session`. Kept only so backups written by builds that
+    /// predate blocks still decode, and so a prompt restored from one can be
+    /// filed into the right block. Nothing reads it to decide behaviour — see
+    /// `blockID`.
     var sessionRaw: String = Session.morning.rawValue
+    /// The sitting this prompt belongs to. The replacement for `session`.
+    ///
+    /// A plain id rather than a SwiftData relationship: a prompt whose block
+    /// has been deleted has to remain findable so it can be re-filed or swept
+    /// up, and an inverse relationship would have quietly nilled it instead.
+    /// See `JournalStore.blockID(for:)`.
+    var blockID: UUID = UUID()
     var order: Int = 0
     var isEnabled: Bool = true
     /// True when this arrived from a template rather than being written by
@@ -87,6 +97,7 @@ final class JournalPrompt {
         style: PromptStyle = .lines(1),
         role: PromptRole = .open,
         session: Session = .morning,
+        blockID: UUID? = nil,
         order: Int,
         isBuiltIn: Bool = false,
         isEnabled: Bool = true,
@@ -100,6 +111,7 @@ final class JournalPrompt {
         self.styleKindRaw = style.kind.rawValue
         self.roleRaw = role.rawValue
         self.sessionRaw = session.rawValue
+        self.blockID = blockID ?? UUID()
         self.order = order
         self.isBuiltIn = isBuiltIn
         self.isEnabled = isEnabled
@@ -136,6 +148,7 @@ extension JournalPrompt {
     static func rows(
         for seeds: [PromptTemplate.Seed],
         from template: PromptTemplate,
+        blocks: [Session: UUID] = [:],
         startingAt start: Int = 0
     ) -> [JournalPrompt] {
         seeds.enumerated().map { offset, seed in
@@ -146,6 +159,7 @@ extension JournalPrompt {
                 style: variant.style,
                 role: seed.role,
                 session: seed.session,
+                blockID: blocks[seed.session],
                 order: start + offset,
                 isBuiltIn: true,
                 originTemplateID: template.id,
@@ -155,22 +169,22 @@ extension JournalPrompt {
     }
 
     /// Every row a template installs, morning then evening.
-    static func rows(for template: PromptTemplate) -> [JournalPrompt] {
+    static func rows(
+        for template: PromptTemplate,
+        blocks: [Session: UUID] = [:]
+    ) -> [JournalPrompt] {
         rows(
             for: template.seeds(for: .morning) + template.seeds(for: .evening),
-            from: template
+            from: template,
+            blocks: blocks
         )
     }
 
-    /// The page a set of quiz answers earns.
-    static func rows(for plan: PromptPlan) -> [JournalPrompt] {
-        rows(for: plan.morning + plan.evening, from: plan.template)
-    }
-
-    /// The set installed when there are no answers to go on — a fresh install
-    /// that hasn't been through the quiz, or a library repaired after being
-    /// emptied.
-    static func defaultSet() -> [JournalPrompt] {
-        rows(for: .classicFive)
+    /// The set every install starts with. Onboarding installs it explicitly at
+    /// the end of the quiz; this is the same page, for the paths that never
+    /// pass through onboarding — a debug launch, a library repaired after
+    /// being emptied.
+    static func defaultSet(blocks: [Session: UUID] = [:]) -> [JournalPrompt] {
+        rows(for: .classicFive, blocks: blocks)
     }
 }

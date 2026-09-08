@@ -23,7 +23,6 @@ struct NewPasswordView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: Theme.Space.lg) {
                     VStack(alignment: .leading, spacing: Theme.Space.sm) {
-                        Text("Almost done").eyebrowStyle()
                         Text("Set a new password")
                             .font(Theme.Typography.serif(32))
                             .foregroundStyle(Theme.Palette.ink)

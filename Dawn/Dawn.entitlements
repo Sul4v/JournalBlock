@@ -6,5 +6,21 @@
 	<array>
 		<string>Default</string>
 	</array>
+	<!--
+	  Screen Time. Requires Apple to approve the capability for the team:
+	  https://developer.apple.com/contact/request/family-controls-distribution
+	  Without approval automatic signing fails and the app will not build.
+	-->
+	<key>com.apple.developer.family-controls</key>
+	<true/>
+	<!--
+	  Shared with the three Screen Time extensions. They run in their own
+	  processes and cannot read SwiftData, so `GateBridge` mirrors the owed
+	  block and the shielded-app selection here. Must match `GateBridge.appGroup`.
+	-->
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>group.com.sulav.journalblock</string>
+	</array>
 </dict>
 </plist>

@@ -7,8 +7,9 @@ struct SettingsView: View {
     @Environment(AuthController.self) private var auth
     @Environment(SubscriptionController.self) private var subs
     @Environment(BackupController.self) private var backup
+    @Environment(\.journalStore) private var store
     @State private var alarms = AlarmService.shared
-    @State private var showAppPicker = false
+    private var reminders: ReminderService { ReminderService.shared }
     @State private var path: [Route]
 
     /// Screens pushed on top of Settings.
@@ -28,11 +29,14 @@ struct SettingsView: View {
                 ScrollView {
                     VStack(spacing: Theme.Space.lg) {
                         masthead
-                        accountSection
-                        backupSection
-                        ritualSection(prefs: prefs)
-                        gateSection(prefs: prefs)
+                        // The page you write, then the two things that protect
+                        // it — where it's kept, and what makes you show up —
+                        // then the account behind them, and taste last.
                         promptsSection
+                        backupSection
+                        gateSection(prefs: prefs)
+                        permissionsSection
+                        accountSection
                         feelSection(prefs: prefs)
                         Color.clear.frame(height: Theme.Space.xxl)
                     }
@@ -41,6 +45,7 @@ struct SettingsView: View {
                 }
                 .scrollIndicators(.hidden)
                 .scrollEdgeEffectStyle(.soft, for: .top)
+                .softTopEdge()
             }
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(for: Route.self) { route in
@@ -50,145 +55,145 @@ struct SettingsView: View {
                 case .backup: BackupView()
                 }
             }
-            .familyActivityPicker(isPresented: $showAppPicker, selection: shieldSelection)
             .task { shield.refreshAuthorization() }
         }
     }
 
-    private var masthead: some View {
-        VStack(alignment: .leading, spacing: Theme.Space.xs) {
-            Text(AppConfig.appName).eyebrowStyle()
-            Text("Settings")
-                .font(Theme.Typography.serif(34))
-                .foregroundStyle(Theme.Palette.ink)
+    /// What is set up, in two short lines: how often, then when.
+    ///
+    /// It used to be one line carrying a count, the times and a separate
+    /// sentence of explanation, under a heading that already said "Your
+    /// Prompts" — three descriptions of the same thing stacked on top of
+    /// each other.
+    private var scheduleSummary: (rhythm: String, times: String) {
+        let blocks = store.activeBlocks()
+        guard !blocks.isEmpty else {
+            return ("Not set up yet", "Choose what you answer, and when.")
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        let rhythm = blocks.count == 1 ? "Once a day" : "\(blocks.count) times a day"
+        let shown = blocks.prefix(4).map(\.timeLabel).joined(separator: " · ")
+        return (rhythm, blocks.count > 4 ? "\(shown) · …" : shown)
     }
 
-    private var shieldSelection: Binding<FamilyActivitySelection> {
-        Binding(get: { shield.selection }, set: { shield.selection = $0 })
+    private var masthead: some View {
+        Text("Settings")
+            .font(Theme.Typography.serif(34))
+            .foregroundStyle(Theme.Palette.ink)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     // MARK: - Sections
 
-    private func ritualSection(prefs: Preferences) -> some View {
+    private func gateSection(prefs: Preferences) -> some View {
         @Bindable var prefs = prefs
         return Group {
-            SectionHeading(eyebrow: "The ritual", title: "Morning")
+            SectionHeading(title: "When it's due")
 
             GlassCard {
-                VStack(spacing: Theme.Space.md) {
-                    DatePicker(
-                        "Journal time",
-                        selection: Binding(
-                            get: { prefs.wakeDate() },
-                            set: { newValue in
-                                let parts = Calendar.current.dateComponents(
-                                    [.hour, .minute], from: newValue
-                                )
-                                prefs.wakeHour = parts.hour ?? 7
-                                prefs.wakeMinute = parts.minute ?? 0
-                                if prefs.alarmEnabled { rescheduleAlarm() }
-                            }
-                        ),
-                        displayedComponents: .hourAndMinute
-                    )
-                    .font(Theme.Typography.sans(16))
-                    .foregroundStyle(Theme.Palette.ink)
+                VStack(alignment: .leading, spacing: Theme.Space.sm) {
+                    // Two rows rather than a segmented control, which is what
+                    // this was. A segment shows one description at a time, so
+                    // choosing meant flipping back and forth to compare — fine
+                    // for Appearance, where the names say everything, and no
+                    // use at all here, where the names are "Alarm" and
+                    // "Reminder" and the difference is whether your phone gets
+                    // taken away. Both consequences are on screen now.
+                    ForEach(GateMode.allCases, id: \.self) { mode in
+                        GateModeRow(
+                            mode: mode,
+                            isSelected: prefs.gateMode == mode
+                        ) {
+                            guard prefs.gateMode != mode else { return }
+                            Haptics.tap(.light)
+                            withAnimation(Theme.Motion.quick) { prefs.gateMode = mode }
+                        }
+                    }
 
-                    Divider().overlay(Theme.Palette.rule)
-
-                    SettingToggle(
-                        title: "Wake alarm",
-                        detail: alarms.isAuthorized
-                            ? "Rings through silent mode and Focus."
-                            : "Needs alarm permission.",
-                        isOn: Binding(
-                            get: { prefs.alarmEnabled },
-                            set: { on in
-                                prefs.alarmEnabled = on
-                                on ? rescheduleAlarm() : alarms.cancelWakeAlarm()
-                            }
-                        )
-                    )
-
-                    Divider().overlay(Theme.Palette.rule)
-
-                    SettingToggle(
-                        title: "Evening reflection",
-                        detail: "Optional second set of prompts, never gated.",
-                        isOn: $prefs.eveningPromptsEnabled
-                    )
-
-                    if let error = alarms.lastError {
+                    if let error = alarms.lastError, prefs.gateMode == .alarm {
+                        NoteLine(text: error)
+                    }
+                    if let error = shield.lastError, prefs.gateMode == .reminder {
                         NoteLine(text: error)
                     }
                 }
             }
+            .onChange(of: prefs.gateMode) { _, _ in applyGateMode() }
         }
     }
 
-    private func gateSection(prefs: Preferences) -> some View {
-        @Bindable var prefs = prefs
-        return Group {
-            SectionHeading(eyebrow: "The lock", title: "Gate")
+    /// Everything the mode implies, in one place, so switching can't leave the
+    /// other half of the previous mode still armed.
+    private func applyGateMode() {
+        let blocks = store.blocks()
+        // Only the blocks with something to ask can ring; an empty one has
+        // nothing for the alarm to hold the user to.
+        let ringable = store.activeBlocks()
+        let owed = store.unwrittenBlockIDs()
+        let mode = prefs.gateMode
+
+        Task { await alarms.reschedule(for: ringable, enabled: mode == .alarm, owed: owed) }
+
+        if mode == .reminder {
+            Task { await shield.requestAuthorization() }
+        } else {
+            shield.setShieldActive(false)
+        }
+        GateScheduler.reschedule(for: blocks, enabled: mode == .reminder)
+        Task { await ReminderService.shared.reschedule(for: blocks) }
+    }
+
+    private var permissionsSection: some View {
+        Group {
+            SectionHeading(title: "Permissions")
 
             GlassCard {
                 VStack(spacing: Theme.Space.md) {
-                    SettingToggle(
-                        title: "Strict mode",
-                        detail: "No way past the morning page. This is the point of Dawn.",
-                        isOn: $prefs.strictMode
-                    )
+                    PermissionRow(
+                        title: "Notifications",
+                        detail: "How a block tells you it's due, and the only way the shield can hand you back to the app.",
+                        isGranted: reminders.isAuthorized
+                    ) {
+                        let granted = await ReminderService.shared.requestAuthorization()
+                        if granted {
+                            await ReminderService.shared.reschedule(for: store.blocks())
+                        }
+                    }
 
                     Divider().overlay(Theme.Palette.rule)
 
-                    SettingToggle(
-                        title: "Block other apps",
-                        detail: "Shields your chosen apps until the page is written.",
-                        isOn: Binding(
-                            get: { prefs.blockAppsUntilDone },
-                            set: { on in
-                                prefs.blockAppsUntilDone = on
-                                if on {
-                                    Task { await shield.requestAuthorization() }
-                                } else {
-                                    shield.setShieldActive(false)
-                                }
-                            }
-                        )
-                    )
+                    PermissionRow(
+                        title: "Screen Time",
+                        detail: "Lets \(AppConfig.appName) shut the other apps until the page is written.",
+                        isGranted: shield.isAuthorized
+                    ) {
+                        await shield.requestAuthorization()
+                    }
 
-                    if prefs.blockAppsUntilDone {
-                        Divider().overlay(Theme.Palette.rule)
+                    Divider().overlay(Theme.Palette.rule)
 
-                        HStack {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Apps to block")
-                                    .font(Theme.Typography.sans(16))
-                                    .foregroundStyle(Theme.Palette.ink)
-                                Text(shield.hasSelection
-                                     ? "\(shield.selection.applicationTokens.count) apps, \(shield.selection.categoryTokens.count) categories"
-                                     : "Nothing chosen yet")
-                                    .font(Theme.Typography.sans(12))
-                                    .foregroundStyle(Theme.Palette.inkTertiary)
-                            }
-                            Spacer()
-                            GhostButton(title: "Choose", isNested: true) { showAppPicker = true }
-                        }
-
-                        if let error = shield.lastError {
-                            NoteLine(text: error)
+                    PermissionRow(
+                        title: "Alarm",
+                        detail: "Rings through silent mode and Focus, which a notification cannot.",
+                        isGranted: alarms.isAuthorized
+                    ) {
+                        let granted = await AlarmService.shared.requestAuthorization()
+                        if granted {
+                            await alarms.reschedule(
+                                for: store.activeBlocks(),
+                                enabled: prefs.gateMode == .alarm,
+                                owed: store.unwrittenBlockIDs()
+                            )
                         }
                     }
                 }
             }
         }
+        .task { await ReminderService.shared.refreshAuthorization() }
     }
 
     private var accountSection: some View {
         Group {
-            SectionHeading(eyebrow: "You", title: "Account")
+            SectionHeading(title: "Account")
 
             NavigationLink(value: Route.account) {
                 GlassCard {
@@ -224,7 +229,7 @@ struct SettingsView: View {
 
     private var backupSection: some View {
         Group {
-            SectionHeading(eyebrow: "Safekeeping", title: "Backup")
+            SectionHeading(title: "Backup")
 
             NavigationLink(value: Route.backup) {
                 GlassCard {
@@ -276,17 +281,18 @@ struct SettingsView: View {
 
     private var promptsSection: some View {
         Group {
-            SectionHeading(eyebrow: "Your questions", title: "Prompts")
+            SectionHeading(title: "Your Blocks")
 
             NavigationLink(value: Route.prompts) {
                 GlassCard {
                     HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Edit prompts")
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(scheduleSummary.rhythm)
                                 .font(Theme.Typography.sans(16))
                                 .foregroundStyle(Theme.Palette.ink)
-                            Text("Reword, reorder, or write your own.")
+                            Text(scheduleSummary.times)
                                 .font(Theme.Typography.sans(12))
+                                .monospacedDigit()
                                 .foregroundStyle(Theme.Palette.inkTertiary)
                         }
                         Spacer()
@@ -303,53 +309,21 @@ struct SettingsView: View {
     private func feelSection(prefs: Preferences) -> some View {
         @Bindable var prefs = prefs
         return Group {
-            SectionHeading(eyebrow: "Details", title: "Feel")
+            SectionHeading(title: "Feel")
 
             GlassCard {
-                VStack(spacing: Theme.Space.md) {
-                    AppearancePicker(selection: $prefs.appearance)
-                    Divider().overlay(Theme.Palette.rule)
-                    // The label and the field were separate views, so
-                    // VoiceOver announced the field as "Optional".
-                    LabeledContent {
-                        TextField("Name", text: $prefs.displayName, prompt: Text("Optional"))
-                            .font(Theme.Typography.sans(16))
-                            .multilineTextAlignment(.trailing)
-                            .foregroundStyle(Theme.Palette.inkSecondary)
-                            .tint(Theme.Palette.ember)
-                            .accessibilityLabel("Name")
-                    } label: {
-                        Text("Name")
-                            .font(Theme.Typography.sans(16))
-                            .foregroundStyle(Theme.Palette.ink)
-                    }
-                }
+                AppearancePicker(selection: $prefs.appearance)
             }
         }
     }
 
-    private func rescheduleAlarm() {
-        Task {
-            await alarms.scheduleWakeAlarm(hour: prefs.wakeHour, minute: prefs.wakeMinute)
-        }
-    }
 }
 
 // MARK: - Rows
 
-/// Light, dark, or follow the phone.
-///
-/// Three states rather than a switch: a switch has nowhere to put "follow the
-/// system", so the first tap would strand the user on a fixed appearance
-/// forever — and following the phone is where most people should stay. The
-/// selection slides between segments rather than blinking, which is the one bit
-/// of motion in Settings and the reason it reads as a physical control.
+/// Light, dark, or follow the phone, using the system's Liquid Glass control.
 private struct AppearancePicker: View {
     @Binding var selection: Theme.Appearance
-
-    /// Drives the sliding indicator. One capsule moves between segments instead
-    /// of three capsules fading in and out.
-    @Namespace private var indicator
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.sm) {
@@ -365,17 +339,18 @@ private struct AppearancePicker: View {
             .accessibilityElement(children: .combine)
             .accessibilityHidden(true)
 
-            HStack(spacing: 0) {
+            Picker("Appearance", selection: $selection) {
                 ForEach(Theme.Appearance.allCases) { option in
-                    segment(option)
+                    Text(option.label).tag(option)
                 }
             }
-            .padding(3)
-            .background(Capsule(style: .continuous).fill(Theme.Palette.ink.opacity(0.05)))
-            .overlay(Capsule(style: .continuous).strokeBorder(Theme.Palette.rule, lineWidth: 1))
-            .accessibilityElement(children: .contain)
-            .accessibilityLabel("Appearance")
+            .pickerStyle(.segmented)
+            .controlSize(.large)
+            .labelsHidden()
             .accessibilityHint(detail)
+            .onChange(of: selection) { _, _ in
+                Haptics.tap(.light)
+            }
         }
     }
 
@@ -386,40 +361,110 @@ private struct AppearancePicker: View {
         case .dark: "Warm charcoal, easier at 6am."
         }
     }
+}
 
-    private func segment(_ option: Theme.Appearance) -> some View {
-        let isSelected = selection == option
-        return Button {
-            guard !isSelected else { return }
-            Haptics.tap(.light)
-            withAnimation(Theme.Motion.settle) { selection = option }
-        } label: {
-            HStack(spacing: 5) {
-                Image(systemName: option.symbol)
-                    .font(Theme.Typography.sans(12, weight: .semibold))
-                    .accessibilityHidden(true)
-                Text(option.label)
-                    .font(Theme.Typography.sans(14, weight: .medium))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.75)
-            }
-            // Cream on near-black in light, charcoal on near-white in dark:
-            // 13:1 either way, because both ends of the pair invert together.
-            .foregroundStyle(isSelected ? Theme.Palette.canvas : Theme.Palette.inkSecondary)
-            .frame(maxWidth: .infinity)
-            .frame(minHeight: 40)
-            .background {
-                if isSelected {
-                    Capsule(style: .continuous)
-                        .fill(Theme.Palette.ink.opacity(0.92))
-                        .matchedGeometryEffect(id: "appearance.selection", in: indicator)
+/// One of the two ways a block can ask for its page.
+///
+/// Deliberately not a `GlassCard` each: glass inside glass flattens the
+/// hierarchy, so the selected row is marked with a plain tinted rectangle and
+/// the card around them stays the only pane.
+private struct GateModeRow: View {
+    let mode: GateMode
+    let isSelected: Bool
+    let select: () -> Void
+
+    var body: some View {
+        Button(action: select) {
+            HStack(alignment: .top, spacing: Theme.Space.sm) {
+                Image(systemName: mode.symbol)
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(
+                        isSelected ? Theme.Palette.emberDeep : Theme.Palette.inkTertiary
+                    )
+                    .frame(width: 22)
+                    .padding(.top, 1)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(mode.label)
+                        .font(Theme.Typography.sans(16, weight: isSelected ? .semibold : .regular))
+                        .foregroundStyle(Theme.Palette.ink)
+                    Text(mode.detail)
+                        .font(Theme.Typography.sans(12))
+                        .foregroundStyle(Theme.Palette.inkTertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .multilineTextAlignment(.leading)
                 }
+
+                Spacer(minLength: Theme.Space.xs)
+
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 17, weight: isSelected ? .semibold : .regular))
+                    .foregroundStyle(
+                        isSelected ? Theme.Palette.emberDeep : Theme.Palette.inkTertiary
+                    )
+                    .padding(.top, 1)
             }
-            .contentShape(Capsule(style: .continuous))
+            .padding(Theme.Space.sm)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: Theme.Radius.field, style: .continuous)
+                    .fill(isSelected ? Theme.Palette.emberSoft.opacity(0.30) : .clear)
+            )
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(option.label)
+        .accessibilityElement(children: .combine)
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+    }
+}
+
+/// One permission: what it buys, and a way to ask for it.
+///
+/// Never a toggle. iOS only lets an app ask once — after that the answer lives
+/// in the system Settings app — so a switch here would be a control that
+/// silently stops working, which is worse than a button that says "Allow".
+private struct PermissionRow: View {
+    let title: String
+    let detail: String
+    let isGranted: Bool
+    let request: () async -> Void
+
+    @State private var isWorking = false
+
+    var body: some View {
+        HStack(alignment: .top, spacing: Theme.Space.sm) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(Theme.Typography.sans(16))
+                    .foregroundStyle(Theme.Palette.ink)
+                Text(detail)
+                    .font(Theme.Typography.sans(12))
+                    .foregroundStyle(Theme.Palette.inkTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: Theme.Space.xs)
+
+            if isGranted {
+                Image(systemName: "checkmark")
+                    .font(Theme.Typography.sans(13, weight: .semibold))
+                    .foregroundStyle(Theme.Palette.emberDeep)
+                    .padding(.top, 3)
+            } else {
+                GhostButton(title: "Allow", isNested: true) {
+                    guard !isWorking else { return }
+                    isWorking = true
+                    Task {
+                        await request()
+                        isWorking = false
+                    }
+                }
+            }
+        }
+        .animation(Theme.Motion.quick, value: isGranted)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(title). \(detail)")
+        .accessibilityValue(isGranted ? "Allowed" : "Not allowed")
     }
 }
 

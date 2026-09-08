@@ -21,11 +21,22 @@ final class JournalEntry {
     /// rather than being a plain flag, so editing a day that was already
     /// uploaded correctly marks it pending again.
     var backedUpAt: Date?
-    /// Set the moment the morning session is finished. This is the flag the
-    /// gate reads — nil means the user still owes today's pages.
+    /// Set the moment the morning session is finished.
+    ///
+    /// Superseded by `completions`, and kept for two reasons: a backup written
+    /// by a pre-blocks build carries these and nothing else, and the migration
+    /// that turns the old fixed pair into blocks reads them to work out which
+    /// days were already done.
     var morningCompletedAt: Date?
     var eveningCompletedAt: Date?
-    /// 1...5, captured in a single tap at the top of the session.
+
+    /// When each block was finished today. One encoded array rather than a
+    /// child model: the list is at most a handful of rows, is only ever read
+    /// whole, and a relationship would have meant a third table to keep in step
+    /// with backup.
+    var completions: [BlockCompletion] = []
+    /// Legacy check-in value retained for existing stores and backup compatibility.
+    /// No longer collected or displayed.
     var mood: Int?
 
     @Relationship(deleteRule: .cascade, inverse: \PromptAnswer.entry)
@@ -41,8 +52,48 @@ final class JournalEntry {
     var isMorningComplete: Bool { morningCompletedAt != nil }
     var isEveningComplete: Bool { eveningCompletedAt != nil }
 
+    // MARK: - Blocks
+
+    func completedAt(_ blockID: UUID) -> Date? {
+        completions.first { $0.blockID == blockID }?.at
+    }
+
+    func isComplete(_ blockID: UUID) -> Bool { completedAt(blockID) != nil }
+
+    /// What the streak counts. Any block written is a day the user showed up —
+    /// someone whose only sitting is at 9pm has kept the habit as surely as
+    /// someone who writes at dawn.
+    var isAnyBlockComplete: Bool { !completions.isEmpty }
+
+    func markComplete(_ blockID: UUID, at date: Date = .now) {
+        if let index = completions.firstIndex(where: { $0.blockID == blockID }) {
+            completions[index].at = date
+        } else {
+            completions.append(BlockCompletion(blockID: blockID, at: date))
+        }
+    }
+
     func answers(for session: JournalPrompt.Session) -> [PromptAnswer] {
         answers.filter { $0.session == session }.sorted { $0.order < $1.order }
+    }
+
+    func answers(forBlock blockID: UUID) -> [PromptAnswer] {
+        answers.filter { $0.blockID == blockID }.sorted { $0.order < $1.order }
+    }
+
+    /// Every answer grouped by the block it was written in, in the order the
+    /// blocks were answered — the reading order for a day in history, which
+    /// must not depend on blocks the user may since have deleted or retimed.
+    var answersByBlock: [(blockID: UUID, title: String, answers: [PromptAnswer])] {
+        var seen: [UUID] = []
+        for answer in answers.sorted(by: { $0.order < $1.order })
+        where !seen.contains(answer.blockID) {
+            seen.append(answer.blockID)
+        }
+        return seen.map { id in
+            let group = answers(forBlock: id)
+            return (id, group.first?.blockTitle ?? "", group)
+        }
     }
 
     /// Everything the user wrote, for previews and search.
@@ -63,6 +114,13 @@ final class PromptAnswer {
     var promptID: UUID = UUID()
     var promptTitle: String = ""
     var sessionRaw: String = JournalPrompt.Session.morning.rawValue
+    /// The block this was written in, and its name at the time.
+    ///
+    /// Snapshotted for the same reason `promptTitle` is: the user can rename
+    /// "Morning" to "Before the noise" or delete the block outright, and a day
+    /// already written has to keep reading the way it was written.
+    var blockID: UUID = UUID()
+    var blockTitle: String = ""
     var order: Int = 0
     var lines: [String] = []
 
@@ -75,11 +133,13 @@ final class PromptAnswer {
     var filledLines: [String] { lines.filter { !$0.trimmed.isEmpty } }
     var hasContent: Bool { !filledLines.isEmpty }
 
-    init(prompt: JournalPrompt, lines: [String]) {
+    init(prompt: JournalPrompt, blockTitle: String, lines: [String]) {
         self.id = UUID()
         self.promptID = prompt.id
         self.promptTitle = prompt.title
         self.sessionRaw = prompt.sessionRaw
+        self.blockID = prompt.blockID
+        self.blockTitle = blockTitle
         self.order = prompt.order
         self.lines = lines
     }
@@ -87,14 +147,30 @@ final class PromptAnswer {
     /// Rebuilds an answer from a decrypted backup, where the prompt it was
     /// written against may no longer exist on this device. The snapshotted
     /// title is the whole reason that still reads correctly.
-    init(promptID: UUID, promptTitle: String, sessionRaw: String, order: Int, lines: [String]) {
+    init(
+        promptID: UUID,
+        promptTitle: String,
+        sessionRaw: String,
+        blockID: UUID,
+        blockTitle: String,
+        order: Int,
+        lines: [String]
+    ) {
         self.id = UUID()
         self.promptID = promptID
         self.promptTitle = promptTitle
         self.sessionRaw = sessionRaw
+        self.blockID = blockID
+        self.blockTitle = blockTitle
         self.order = order
         self.lines = lines
     }
+}
+
+/// One block finished on one day.
+struct BlockCompletion: Codable, Equatable, Hashable {
+    var blockID: UUID
+    var at: Date
 }
 
 extension String {
