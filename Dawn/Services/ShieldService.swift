@@ -3,14 +3,14 @@ import Observation
 import FamilyControls
 import ManagedSettings
 
-/// Extends the gate past this app: while today's pages are unwritten, every
-/// app is shielded system-wide via Screen Time.
+/// Extends the gate past this app: while today's pages are unwritten, the apps
+/// the user picked are shielded system-wide via Screen Time.
 ///
-/// There is no app picker any more. Choosing which apps to lock was a way of
-/// negotiating with yourself before the morning arrived, and a shield with an
-/// empty selection — the state most people left it in — shielded nothing at
-/// all while reporting itself on. Reminder mode now shields every category,
-/// which is the promise the mode makes.
+/// The picked apps, not every app. `.all()` was tried twice and shielded
+/// nothing on device either time, so the shield is built from
+/// `FamilyActivityPicker` tokens — see `GateSelection`, which carries the
+/// evidence. The consequence lives in `SettingsView`: an empty picker is the
+/// feature switched off, so the app has to keep asking for one.
 ///
 /// Requires the `com.apple.developer.family-controls` entitlement. Without it
 /// authorization simply fails and the app falls back to the in-app gate only —
@@ -19,7 +19,10 @@ import ManagedSettings
 final class ShieldService {
     static let shared = ShieldService()
 
-    @ObservationIgnored private let store = ManagedSettingsStore(named: .dawnGate)
+    /// The default store, matching SleepBlock and `GateMonitor`. It was a
+    /// named store (`dawn.morningGate`) and a shield applied to it never
+    /// appeared on the phone. See `GateSelection.store`.
+    @ObservationIgnored private let store = GateSelection.store()
     /// The shared app group, not `.standard`: the monitor extension re-applies
     /// this shield while the app isn't running, and it can only read the
     /// selection if both processes are looking at the same suite.
@@ -58,61 +61,90 @@ final class ShieldService {
 
     /// Single entry point, called by `RootView` whenever the gate state changes.
     ///
-    /// `pending` is mirrored into the app group whether or not a shield is
-    /// applied, because the shield extension reads it to name the sitting and
-    /// may be launched a moment after the app has gone away.
-    func sync(pending: GateBridge.PendingBlock?, blockingEnabled: Bool) {
-        GateBridge.pendingBlock = pending
+    /// The schedule is mirrored into the app group whether or not a shield is
+    /// applied, because both extensions read it — to decide whether to shield
+    /// at all, and to name the sitting — and either may be launched a moment
+    /// after the app has gone away.
+    ///
+    /// Whether *this* process shields is then resolved from the mirror rather
+    /// than passed in, so the app and the extensions can never disagree about
+    /// what is owed: there is one rule, in one place.
+    func sync(schedule: GateBridge.GateSchedule, blockingEnabled: Bool) {
+        GateBridge.schedule = schedule
         GateBridge.isShieldingEnabled = blockingEnabled
-        setShieldActive(blockingEnabled && pending != nil)
+        setShieldActive(blockingEnabled && GateBridge.pendingBlock() != nil)
     }
 
     func setShieldActive(_ active: Bool) {
         guard isAuthorized else {
             if isShieldActive { clear() }
+            recordTrace(event: "app-unauthorized", shielded: false)
             return
         }
         active ? apply() : clear()
+        recordTrace(event: active ? "app-apply" : "app-clear", shielded: active)
     }
 
-    /// Every category, rather than a set of tokens.
+    /// Records the store's state on arrival, before this process writes
+    /// anything.
     ///
-    /// `.all(except:)` would be the way to spare this app by name, but an
-    /// `ApplicationToken` can only come from a `FamilyActivityPicker` — there
-    /// is no API that mints one for your own bundle id — so the exception set
-    /// would be empty anyway. Apple exempts its own critical apps (Phone,
-    /// Messages, Settings) from shielding regardless, which is the floor this
-    /// can't go below.
+    /// Every other trace entry is taken immediately after a write, which can
+    /// only ever confirm that the writer can see its own work. This one is
+    /// taken cold, at the moment the app comes back, and so is the only entry
+    /// that says whether a shield *survived* while the app was away. A run of
+    /// `app-apply stored=1` followed by `observe stored=0` is the whole bug in
+    /// two lines.
+    func observe() {
+        recordTrace(event: "observe", shielded: isShieldActive)
+    }
+
+    /// The app's own line in the monitor's log, with the store read back.
+    ///
+    /// The extensions were the only processes writing traces, which made the
+    /// app's half of the same job invisible — and the app is the process that
+    /// runs when the user is actually looking at the phone.
+    private func recordTrace(event: String, shielded: Bool) {
+        GateBridge.recordMonitor(
+            .init(
+                at: Date(),
+                activity: "app",
+                event: event,
+                shielded: shielded,
+                pending: GateBridge.pendingBlock()?.timeLabel,
+                enabled: GateBridge.isShieldingEnabled,
+                offered: GateSelection.current.applicationTokens.count,
+                stored: store.shield.applications?.count ?? -1,
+                authorized: String(describing: authorizationStatus)
+            )
+        )
+    }
+
+    /// Apple exempts its own critical apps (Phone, Messages, Settings) from
+    /// shielding regardless, which is the floor this can't go below.
     private func apply() {
-        store.shield.applications = nil
-        store.shield.applicationCategories = .all()
-        // Web domains too, or Safari is shielded while any in-app browser
-        // isn't — which turns "every other app is shut" into a puzzle with a
-        // known answer.
-        store.shield.webDomains = nil
-        store.shield.webDomainCategories = .all()
+        GateSelection.apply(to: store)
+        clearLegacyStore()
         isShieldActive = true
     }
 
     private func clear() {
-        store.shield.applications = nil
-        store.shield.applicationCategories = nil
-        store.shield.webDomains = nil
-        store.shield.webDomainCategories = nil
+        GateSelection.clear(from: store)
+        clearLegacyStore()
         isShieldActive = false
+    }
+
+    /// Empties the named store this app used to write to. An install that
+    /// upgraded mid-shield has one standing there that nothing else will ever
+    /// take down, and settings from every store are unioned — so a stale one
+    /// is a shield the user cannot clear by writing their page.
+    private func clearLegacyStore() {
+        GateSelection.clear(from: ManagedSettingsStore(named: .init(GateBridge.legacyStoreName)))
     }
 
     /// Belt and braces: if the user leaves reminder mode, drop any live shield.
     func disable() {
         clear()
         GateBridge.isShieldingEnabled = false
-        GateBridge.pendingBlock = nil
+        GateBridge.schedule = nil
     }
-}
-
-private extension ManagedSettingsStore.Name {
-    /// Shared with `GateMonitor`, which writes to the same store from its own
-    /// process. Two names would mean two stores, and a shield the app believes
-    /// it cleared would still be standing.
-    static let dawnGate = Self(GateBridge.storeName)
 }

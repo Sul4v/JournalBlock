@@ -20,11 +20,13 @@ enum GateBridge {
 
     static let urlScheme = "journalblock"
 
-    /// The `ManagedSettingsStore` the gate's shields live in. The app and the
-    /// monitor extension write to the same store, so this name has to be one
-    /// constant — two stores with different names means the app clears a shield
-    /// the extension applied, or worse, doesn't.
-    static let storeName = "dawn.morningGate"
+    /// **Retired.** The gate's shields lived in a `ManagedSettingsStore` named
+    /// this, on the reasoning that a named store keeps one app's settings from
+    /// trampling another's. Nothing applied to it ever appeared on the phone.
+    /// Both processes now use the default unnamed store, matching SleepBlock —
+    /// see `GateSelection.store`. Kept only so an install carrying a shield in
+    /// the old store has something to clear it with.
+    static let legacyStoreName = "dawn.morningGate"
 
     static var defaults: UserDefaults? { UserDefaults(suiteName: appGroup) }
 
@@ -83,22 +85,188 @@ enum GateBridge {
         }
     }
 
-    /// Written by the app whenever the gate opens or closes. `nil` means the
-    /// phone is the user's — any shield still on screen is stale and should
-    /// let them through.
-    static var pendingBlock: PendingBlock? {
+    /// Every gating block, and which of them today's page has already answered.
+    ///
+    /// This is deliberately the *schedule* rather than a snapshot of the one
+    /// block currently owed. A snapshot can only ever be as fresh as the last
+    /// time the app ran, and the moment that matters most — the block's own
+    /// time, on a phone that has been in someone's pocket since last night —
+    /// is precisely a moment the app has not seen. A snapshot taken after
+    /// yesterday's page was written says "nothing owed", and the monitor
+    /// extension, reading it at seven this morning, would take the shield down
+    /// on the one morning it was built to put it up.
+    ///
+    /// With the schedule and a day-stamp, the extension can work out what is
+    /// owed at any moment without the app's help. See `pendingBlock(now:)`.
+    struct GateSchedule: Codable, Equatable, Sendable {
+        /// Blocks that hold the door and have something to ask, in time order.
+        /// Empty means the gate is off — a user before their first session day,
+        /// or one with no gating blocks left.
+        var blocks: [PendingBlock]
+        /// The day `written` describes. A stamp from an earlier day means
+        /// today's page is untouched, which is what makes the overnight case
+        /// resolve correctly with no app process involved.
+        var writtenDay: Date
+        /// Blocks completed on `writtenDay`.
+        var written: [UUID]
+
+        init(blocks: [PendingBlock] = [], writtenDay: Date = .now, written: [UUID] = []) {
+            self.blocks = blocks
+            self.writtenDay = writtenDay
+            self.written = written
+        }
+    }
+
+    /// Written by the app whenever the gate changes. `nil` means the app has
+    /// never synced, in which case the shields fall back to generic copy.
+    static var schedule: GateSchedule? {
         get {
-            guard let data = defaults?.data(forKey: Key.pendingBlock) else { return nil }
-            return try? JSONDecoder().decode(PendingBlock.self, from: data)
+            guard let data = defaults?.data(forKey: Key.schedule) else { return nil }
+            return try? JSONDecoder().decode(GateSchedule.self, from: data)
         }
         set {
             guard let defaults else { return }
             guard let newValue, let data = try? JSONEncoder().encode(newValue) else {
-                defaults.removeObject(forKey: Key.pendingBlock)
+                defaults.removeObject(forKey: Key.schedule)
                 return
             }
-            defaults.set(data, forKey: Key.pendingBlock)
+            defaults.set(data, forKey: Key.schedule)
         }
+    }
+
+    /// The block the user owes right now. `nil` means the phone is theirs —
+    /// any shield still on screen is stale and should let them through.
+    ///
+    /// Must stay in step with `JournalStore.pendingGateBlock`, which is the
+    /// same rule against SwiftData: the earliest unwritten gating block that
+    /// has come due, with the first block of the day due from midnight so that
+    /// waking early doesn't find the front door open.
+    ///
+    /// Cheap enough for `ShieldConfigurationProvider`, which has a few hundred
+    /// milliseconds to return a whole screen: one small JSON decode, one
+    /// same-day comparison, and integer arithmetic on minutes.
+    static func pendingBlock(
+        now: Date = .now,
+        calendar: Calendar = .current
+    ) -> PendingBlock? {
+        guard let schedule, !schedule.blocks.isEmpty else { return nil }
+
+        // A stamp from any other day tells us nothing about today's page, so
+        // nothing counts as written. This is the whole overnight fix.
+        let written: Set<UUID> = calendar.isDate(schedule.writtenDay, inSameDayAs: now)
+            ? Set(schedule.written)
+            : []
+
+        let minutes = calendar.component(.hour, from: now) * 60
+            + calendar.component(.minute, from: now)
+
+        for (index, block) in schedule.blocks.enumerated() {
+            guard !written.contains(block.id) else { continue }
+            if index == 0 || minutes >= block.minutesOfDay { return block }
+        }
+        return nil
+    }
+
+    // MARK: - Did the monitor run?
+
+    /// A breadcrumb per `GateMonitor` event.
+    ///
+    /// The monitor is launched by the system into its own process, with no UI,
+    /// no console anyone can watch, and no way to report what it decided. When
+    /// a morning goes by without a shield there is otherwise no way to tell
+    /// "the extension never ran" from "it ran and resolved nothing owed" — two
+    /// very different bugs that look identical from the outside. Both were
+    /// guessed at, at length, before this existed.
+    ///
+    /// Bounded and tiny. It is read off the device with `devicectl` when a
+    /// morning goes wrong.
+    struct MonitorTrace: Codable, Equatable, Sendable {
+        var at: Date
+        var activity: String
+        /// "start" or "end".
+        var event: String
+        /// What the monitor did to the shield.
+        var shielded: Bool
+        /// The block it resolved, or nil if it decided nothing was owed.
+        var pending: String?
+        /// What the mirror said about the mode, so a false here explains a
+        /// cleared shield on its own.
+        var enabled: Bool
+
+        /// How many application tokens we handed `ManagedSettings`.
+        var offered: Int?
+
+        /// How many the store reports **back** immediately afterwards.
+        ///
+        /// The one fact nothing in this chain has ever checked. Every other
+        /// signal here is this process describing its own intentions: the
+        /// monitor ran, it resolved a block, it called apply. None of that says
+        /// the write survived. `ManagedSettingsStore` fails silently when it
+        /// declines a write — no throw, no error, no log — so a store that
+        /// reads back nil right after being handed a token is the difference
+        /// between "we never tried" and "we tried and iOS refused".
+        var stored: Int?
+
+        /// Family Controls authorization as seen from *this* process. The
+        /// monitor never checked it, and an unauthorized write is exactly the
+        /// kind iOS discards without saying so.
+        var authorized: String?
+
+        init(
+            at: Date,
+            activity: String,
+            event: String,
+            shielded: Bool,
+            pending: String?,
+            enabled: Bool,
+            offered: Int? = nil,
+            stored: Int? = nil,
+            authorized: String? = nil
+        ) {
+            self.at = at
+            self.activity = activity
+            self.event = event
+            self.shielded = shielded
+            self.pending = pending
+            self.enabled = enabled
+            self.offered = offered
+            self.stored = stored
+            self.authorized = authorized
+        }
+
+        /// Tolerant of traces written before the three fields above existed —
+        /// otherwise one old entry makes the whole log undecodable and the
+        /// evidence disappears exactly when it is wanted.
+        init(from decoder: Decoder) throws {
+            let box = try decoder.container(keyedBy: CodingKeys.self)
+            at = try box.decode(Date.self, forKey: .at)
+            activity = try box.decode(String.self, forKey: .activity)
+            event = try box.decode(String.self, forKey: .event)
+            shielded = try box.decode(Bool.self, forKey: .shielded)
+            pending = try box.decodeIfPresent(String.self, forKey: .pending)
+            enabled = try box.decode(Bool.self, forKey: .enabled)
+            offered = try box.decodeIfPresent(Int.self, forKey: .offered)
+            stored = try box.decodeIfPresent(Int.self, forKey: .stored)
+            authorized = try box.decodeIfPresent(String.self, forKey: .authorized)
+        }
+    }
+
+    private static let maxTrace = 20
+
+    static var monitorTrace: [MonitorTrace] {
+        get {
+            guard let data = defaults?.data(forKey: Key.monitorTrace) else { return [] }
+            return (try? JSONDecoder().decode([MonitorTrace].self, from: data)) ?? []
+        }
+        set {
+            guard let defaults, let data = try? JSONEncoder().encode(newValue.suffix(maxTrace).map { $0 })
+            else { return }
+            defaults.set(data, forKey: Key.monitorTrace)
+        }
+    }
+
+    static func recordMonitor(_ trace: MonitorTrace) {
+        monitorTrace = monitorTrace + [trace]
     }
 
     /// The app's chosen apps and categories, as encoded `FamilyActivitySelection`.
@@ -144,8 +312,12 @@ enum GateBridge {
     static let handoffNotificationID = "journalblock.shield.handoff"
 
     private enum Key {
-        static let pendingBlock = "gate.pendingBlock"
+        /// Not the old "gate.pendingBlock": that key held a single block with
+        /// no day stamp, and a build reading it as a schedule would decode
+        /// nothing. A fresh key means the first sync writes the truth.
+        static let schedule = "gate.schedule"
         static let selection = "gate.shieldSelection"
         static let shieldingEnabled = "gate.shieldingEnabled"
+        static let monitorTrace = "gate.monitorTrace"
     }
 }

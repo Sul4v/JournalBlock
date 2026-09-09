@@ -72,7 +72,7 @@ final class ShieldActionHandler: ShieldActionDelegate {
     /// An immediate notification whose tap opens the app at the owed block.
     private func postHandoff(then finish: @escaping () -> Void) {
         let center = UNUserNotificationCenter.current()
-        let block = GateBridge.pendingBlock
+        let block = GateBridge.pendingBlock()
 
         let content = UNMutableNotificationContent()
         content.title = block.map { "Your \($0.timeLabel) page" } ?? "Your page is waiting"

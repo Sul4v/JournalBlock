@@ -103,7 +103,14 @@ targets:
     platform: iOS
     sources:
       - path: ShieldConfiguration
+      # `GateSelection` is excluded on purpose. It is the only shared file that
+      # touches ManagedSettings state, this extension never shields anything —
+      # it only draws the card — and a shield configuration extension runs under
+      # a tight jetsam limit. One the system kills falls back to Apple's generic
+      # gray shield, which is indistinguishable from our own screen failing.
       - path: Shared
+        excludes:
+          - GateSelection.swift
     info:
       path: ShieldConfiguration/Info.plist
       # XcodeGen *generates* this plist, so NSExtension has to be declared here
@@ -131,7 +138,11 @@ targets:
     platform: iOS
     sources:
       - path: ShieldAction
+      # Same reasoning as ShieldConfiguration: this extension answers a button
+      # tap and is torn down immediately. It never applies a shield.
       - path: Shared
+        excludes:
+          - GateSelection.swift
     info:
       path: ShieldAction/Info.plist
       # XcodeGen *generates* this plist, so NSExtension has to be declared here

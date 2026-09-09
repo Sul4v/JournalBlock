@@ -28,6 +28,9 @@ struct DawnApp: App {
             )
         }
         GoogleSignInService.configure()
+        // Before the scene exists: a tap that launches the app cold is delivered
+        // as soon as launching finishes, and a delegate set any later misses it.
+        NotificationRouter.shared.register()
 
         store = JournalStore(context: container.mainContext)
         store.prepareLibrary()

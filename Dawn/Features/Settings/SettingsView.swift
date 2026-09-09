@@ -11,9 +11,33 @@ struct SettingsView: View {
     @State private var alarms = AlarmService.shared
     private var reminders: ReminderService { ReminderService.shared }
     @State private var path: [Route]
+    /// Which apps iOS should meter so the shield can land on someone already
+    /// inside one. See `GateScheduler.reachEvent` — this never decides what is
+    /// shielded, only where we can catch you.
+    /// `includeEntireCategory: true` is load-bearing, not a detail.
+    ///
+    /// With the default initialiser, picking a category fills `categoryTokens`
+    /// and leaves `applicationTokens` **empty** — and a category policy with no
+    /// application tokens behind it shields nothing. That is the state this app
+    /// shipped in: thirteen categories chosen, zero apps, `shield.applications`
+    /// set to nil, and Instagram opening straight through. It is the same
+    /// failure as the earlier `.all()` attempt, which is a category policy with
+    /// no tokens by another route.
+    ///
+    /// With this flag the picker resolves a category down to the concrete apps
+    /// inside it, so choosing Social hands us real `ApplicationToken`s.
+    @State private var reachSelection = FamilyActivitySelection(includeEntireCategory: true)
+    @State private var isPickingReach = false
 
     /// Screens pushed on top of Settings.
-    enum Route: Hashable { case prompts, account, backup }
+    enum Route: Hashable {
+        case prompts, account, backup
+        #if DEBUG
+        /// Why the gate did or didn't shield, and what the monitor extension
+        /// actually recorded. See `ShieldDiagnosticsView`.
+        case shieldDiagnostics
+        #endif
+    }
 
     init(start: Route? = nil) {
         _path = State(initialValue: start.map { [$0] } ?? [])
@@ -38,6 +62,9 @@ struct SettingsView: View {
                         permissionsSection
                         accountSection
                         feelSection(prefs: prefs)
+                        #if DEBUG
+                        diagnosticsSection
+                        #endif
                         Color.clear.frame(height: Theme.Space.xxl)
                     }
                     .pageGutter()
@@ -53,6 +80,9 @@ struct SettingsView: View {
                 case .prompts: PromptLibraryView()
                 case .account: AccountView()
                 case .backup: BackupView()
+                #if DEBUG
+                case .shieldDiagnostics: ShieldDiagnosticsView()
+                #endif
                 }
             }
             .task { shield.refreshAuthorization() }
@@ -109,6 +139,33 @@ struct SettingsView: View {
                         }
                     }
 
+                    if prefs.gateMode == .reminder {
+                        Divider().overlay(Theme.Palette.rule)
+                        Button {
+                            Haptics.tap(.light)
+                            isPickingReach = true
+                        } label: {
+                            HStack(alignment: .firstTextBaseline) {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("Apps to shut")
+                                        .font(Theme.Typography.sans(15, weight: .semibold))
+                                        .foregroundStyle(Theme.Palette.ink)
+                                    Text(reachSummary)
+                                        .font(Theme.Typography.sans(13))
+                                        .foregroundStyle(Theme.Palette.inkSecondary)
+                                        .multilineTextAlignment(.leading)
+                                }
+                                Spacer(minLength: Theme.Space.sm)
+                                Image(systemName: "chevron.right")
+                                    .font(Theme.Typography.sans(13, weight: .semibold))
+                                    .foregroundStyle(Theme.Palette.inkTertiary)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+
                     if let error = alarms.lastError, prefs.gateMode == .alarm {
                         NoteLine(text: error)
                     }
@@ -117,8 +174,63 @@ struct SettingsView: View {
                     }
                 }
             }
+            .familyActivityPicker(isPresented: $isPickingReach, selection: $reachSelection)
+            .onChange(of: reachSelection) { _, new in
+                GateBridge.selectionData = try? JSONEncoder().encode(new)
+                GateScheduler.reschedule(
+                    for: store.blocks(),
+                    enabled: prefs.blockAppsUntilDone
+                )
+                // These tokens *are* the shield now, so a change here has to
+                // reach the store at once. Before, picking apps during an owed
+                // block left the phone open until the next foreground.
+                shield.setShieldActive(
+                    prefs.blockAppsUntilDone && GateBridge.pendingBlock() != nil
+                )
+            }
+            .task {
+                if let data = GateBridge.selectionData,
+                   let saved = try? JSONDecoder().decode(FamilyActivitySelection.self, from: data),
+                   // A selection saved before `includeEntireCategory` was set
+                   // carries categories with no apps behind them, which shields
+                   // nothing. Drop it rather than show it back as if it worked.
+                   !(saved.applicationTokens.isEmpty && !saved.categoryTokens.isEmpty) {
+                    reachSelection = saved
+                }
+                // An empty picker in reminder mode is the block silently doing
+                // nothing, which is the exact failure this feature keeps
+                // landing in. Ask once, here, rather than let it sit.
+                if prefs.gateMode == .reminder, shield.isAuthorized, reachCount == 0 {
+                    isPickingReach = true
+                }
+            }
             .onChange(of: prefs.gateMode) { _, _ in applyGateMode() }
         }
+    }
+
+    /// What the picker has, in words.
+    ///
+    /// The empty case has to read as an alarm, because it is one. These tokens
+    /// are the whole shield — `.all()` shielded nothing on device, twice — so
+    /// an empty picker is reminder mode switched off while reporting itself on.
+    /// That state is also what `emptyReachWarning` and the auto-present in
+    /// `body` exist to stop the user sitting in.
+    ///
+    /// The same tokens are what iOS meters, which is what lets the shield land
+    /// on someone already inside an app. Picking whole *categories* rather than
+    /// single apps is worth doing for that reason alone: it widens both the
+    /// block and the catch in one tap.
+    private var reachSummary: String {
+        guard reachCount > 0 else {
+            return "Nothing chosen, so nothing is shut. Pick the apps — or whole categories — you lose time in."
+        }
+        return "\(reachCount) chosen. These stay shut until the page is written."
+    }
+
+    private var reachCount: Int {
+        reachSelection.applicationTokens.count
+            + reachSelection.categoryTokens.count
+            + reachSelection.webDomainTokens.count
     }
 
     /// Everything the mode implies, in one place, so switching can't leave the
@@ -134,13 +246,66 @@ struct SettingsView: View {
         Task { await alarms.reschedule(for: ringable, enabled: mode == .alarm, owed: owed) }
 
         if mode == .reminder {
-            Task { await shield.requestAuthorization() }
+            Task {
+                await shield.requestAuthorization()
+                // Raise it here, not only in `RootView`. The root's own
+                // `onChange(of: gateMode)` has already been and gone by the
+                // time the system dialog is answered, and it read the service
+                // as unauthorized — so switching mode on a block that is
+                // already owed armed everything and shielded nothing until the
+                // next foreground.
+                // The mirror is already correct — the root wrote it
+                // synchronously when the mode changed — so this only has to
+                // apply what the mirror already says.
+                shield.setShieldActive(
+                    prefs.blockAppsUntilDone && GateBridge.pendingBlock() != nil
+                )
+            }
         } else {
             shield.setShieldActive(false)
         }
         GateScheduler.reschedule(for: blocks, enabled: mode == .reminder)
         Task { await ReminderService.shared.reschedule(for: blocks) }
     }
+
+    #if DEBUG
+    /// The one screen that can answer "why was there no shield this morning"
+    /// without a cable and a guess. Never shipped.
+    private var diagnosticsSection: some View {
+        Group {
+            SectionHeading(title: "Debug")
+
+            NavigationLink(value: Route.shieldDiagnostics) {
+                GlassCard {
+                    HStack(spacing: Theme.Space.md) {
+                        Image(systemName: "stethoscope")
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundStyle(Theme.Palette.emberDeep)
+                            .frame(width: 40, height: 40)
+                            .background(Circle().fill(Theme.Palette.emberSoft.opacity(0.4)))
+                            .accessibilityHidden(true)
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Shield diagnostics")
+                                .font(Theme.Typography.sans(15, weight: .medium))
+                                .foregroundStyle(Theme.Palette.ink)
+                            Text("What the gate decided, and what the monitor recorded.")
+                                .font(Theme.Typography.sans(12))
+                                .foregroundStyle(Theme.Palette.inkTertiary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        Spacer(minLength: 0)
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(Theme.Palette.inkTertiary)
+                    }
+                }
+                .accessibilityElement(children: .combine)
+            }
+            .buttonStyle(.plain)
+        }
+    }
+    #endif
 
     private var permissionsSection: some View {
         Group {
@@ -150,7 +315,7 @@ struct SettingsView: View {
                 VStack(spacing: Theme.Space.md) {
                     PermissionRow(
                         title: "Notifications",
-                        detail: "How a block tells you it's due, and the only way the shield can hand you back to the app.",
+                        detail: "How a block says it's due, and the shield's way back.",
                         isGranted: reminders.isAuthorized
                     ) {
                         let granted = await ReminderService.shared.requestAuthorization()
@@ -163,7 +328,7 @@ struct SettingsView: View {
 
                     PermissionRow(
                         title: "Screen Time",
-                        detail: "Lets \(AppConfig.appName) shut the other apps until the page is written.",
+                        detail: "Lets \(AppConfig.appName) shut the other apps.",
                         isGranted: shield.isAuthorized
                     ) {
                         await shield.requestAuthorization()
@@ -173,7 +338,7 @@ struct SettingsView: View {
 
                     PermissionRow(
                         title: "Alarm",
-                        detail: "Rings through silent mode and Focus, which a notification cannot.",
+                        detail: "Rings through silent mode and Focus.",
                         isGranted: alarms.isAuthorized
                     ) {
                         let granted = await AlarmService.shared.requestAuthorization()

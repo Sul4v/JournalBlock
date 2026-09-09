@@ -414,13 +414,16 @@ struct HomeView: View {
     ///
     /// The right-hand end of a block's time line.
     ///
-    /// Three states, and only two of them show anything. The block that is
-    /// *due* — the earliest one still unwritten — gets a dot, and nothing else
-    /// on this screen does; a mark with one meaning needs no label. A block
-    /// that came due earlier and was skipped past keeps the words instead, so
-    /// the two owed states can't be confused for each other. Finished and
-    /// not-yet-due say nothing, or the dot would have nothing to stand out
-    /// against.
+    /// Three states, three marks, and one silence. The block that is *due* —
+    /// the earliest one still unwritten — gets a dot, and nothing else on this
+    /// screen does; a mark with one meaning needs no label. A block that came
+    /// due earlier and was skipped past keeps the words instead, so the two
+    /// owed states can't be confused for each other. A finished block gets a
+    /// tick, in ink rather than ember: done is worth seeing, but it is not the
+    /// thing being asked for, and an ember tick would compete with the one mark
+    /// that is. Only a block whose hour hasn't come says nothing at all — it
+    /// has nothing to report yet, and filling every row would leave the dot
+    /// with nothing to stand out against.
     @ViewBuilder
     private func statusMarker(_ state: BlockStatus, isDueNow: Bool) -> some View {
         switch state {
@@ -439,7 +442,14 @@ struct HomeView: View {
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel("Still to write")
 
-        case .done, .upcoming:
+        case .done:
+            Image(systemName: "checkmark")
+                .font(Theme.Typography.sans(12, weight: .semibold))
+                .foregroundStyle(Theme.Palette.inkTertiary)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Written")
+
+        case .upcoming:
             EmptyView()
         }
     }

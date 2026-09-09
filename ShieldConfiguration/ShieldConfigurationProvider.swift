@@ -7,8 +7,9 @@ import UIKit
 /// The title is the wordmark and never changes. Everything situational — which
 /// sitting is owed, how late it is, and how hard the screen leans on them — is
 /// carried by the subtitle and the two buttons, written off
-/// `GateBridge.pendingBlock`, which the app mirrors into the shared group
-/// whenever the gate changes. If that mirror is empty, generic copy stands in;
+/// `GateBridge.pendingBlock()`, which resolves the owed sitting from the
+/// schedule the app mirrors into the shared group. If that mirror is empty,
+/// generic copy stands in;
 /// a shield that renders nothing is a black screen the user cannot get past.
 ///
 /// This runs on a hard deadline. The system gives the extension a few hundred
@@ -49,7 +50,7 @@ final class ShieldConfigurationProvider: ShieldConfigurationDataSource {
     /// and a web domain are all the same situation from the user's side: the
     /// page isn't written yet.
     private func shield() -> ShieldConfiguration {
-        let block = GateBridge.pendingBlock
+        let block = GateBridge.pendingBlock()
         let now = Clock.current()
         let pressure = Pressure(block: block, now: now)
 

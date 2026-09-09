@@ -11,9 +11,10 @@ import FamilyControls
 ///      cannot open this app directly (see `ShieldActionHandler`); it posts a
 ///      notification and the user taps it. Without this permission that button
 ///      can only bounce them to the home screen.
-///   2. Screen Time — the shield, which in reminder mode shuts every other
-///      app until the page is written. No picker: there is nothing to choose
-///      between any more.
+///      2. Screen Time — the shield. It is followed by the app picker, and
+///      that picker is not optional in any meaningful sense: the shield is
+///      built from its tokens, so skipping it leaves reminder mode reporting
+///      itself on and shutting nothing. See `GateSelection`.
 ///   3. Alarm — the wake alarm, which rings through silent mode and Focus.
 ///
 /// Nothing here is mandatory. Every step is skippable and declining any of
@@ -32,6 +33,14 @@ struct PermissionsPrimerView: View {
     @State private var alarm: Step = .idle
     @State private var isWorking = false
     @State private var appeared = false
+
+    /// The apps the gate shuts, and the same tokens iOS meters so the shield
+    /// can land on someone already inside one. See `GateSelection`.
+    /// `includeEntireCategory: true` so a category pick yields real
+    /// application tokens. See `SettingsView.reachSelection` for why that is
+    /// the difference between a shield and nothing at all.
+    @State private var reachSelection = FamilyActivitySelection(includeEntireCategory: true)
+    @State private var isPickingReach = false
 
     private enum Step: Equatable {
         case idle, granted, declined
@@ -67,10 +76,19 @@ struct PermissionsPrimerView: View {
             }
             .safeAreaInset(edge: .bottom) { actions }
         }
+        .familyActivityPicker(isPresented: $isPickingReach, selection: $reachSelection)
+        .onChange(of: reachSelection) { _, new in
+            GateBridge.selectionData = try? JSONEncoder().encode(new)
+        }
         .onAppear {
             withAnimation(Theme.Motion.gentle) { appeared = true }
         }
         .task {
+            if let data = GateBridge.selectionData,
+               let saved = try? JSONDecoder().decode(FamilyActivitySelection.self, from: data),
+               !(saved.applicationTokens.isEmpty && !saved.categoryTokens.isEmpty) {
+                reachSelection = saved
+            }
             // Someone who granted these on another device, or who is arriving
             // back here after a reinstall, shouldn't be asked again.
             await ReminderService.shared.refreshAuthorization()
@@ -110,8 +128,9 @@ struct PermissionsPrimerView: View {
             row(
                 symbol: "hourglass",
                 title: "Screen Time",
-                detail: "Lets JournalBlock hold every other app shut until the page is written.",
-                state: screenTime
+                detail: "Lets JournalBlock hold the apps you choose shut until the page is written.",
+                state: screenTime,
+                accessory: screenTime == .granted ? AnyView(reachRow) : nil
             )
 
             row(
@@ -121,6 +140,38 @@ struct PermissionsPrimerView: View {
                 state: alarm
             )
         }
+    }
+
+    /// Offered under Screen Time once it is granted, and only there: it is a
+    /// refinement of that permission, not a fourth thing to agree to. Naming
+    /// the apps here is also the one chance to catch someone mid-scroll — see
+    /// `requestAll`.
+    private var reachRow: some View {
+        Button {
+            Haptics.tap(.light)
+            isPickingReach = true
+        } label: {
+            HStack(spacing: Theme.Space.xs) {
+                Text(isReachEmpty
+                     ? "Choose what gets shut. Nothing is blocked until you do."
+                     : "\(reachCount) chosen. These stay shut until the page is written.")
+                    .font(Theme.Typography.sans(13))
+                    .foregroundStyle(Theme.Palette.emberDeep)
+                    .multilineTextAlignment(.leading)
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right")
+                    .font(Theme.Typography.sans(11, weight: .semibold))
+                    .foregroundStyle(Theme.Palette.inkTertiary)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var reachCount: Int {
+        reachSelection.applicationTokens.count
+            + reachSelection.categoryTokens.count
+            + reachSelection.webDomainTokens.count
     }
 
     private func row(
@@ -226,6 +277,24 @@ struct PermissionsPrimerView: View {
             let granted = await AlarmService.shared.requestAuthorization()
             withAnimation(Theme.Motion.quick) { alarm = granted ? .granted : .declined }
         }
+
+        // Last, and only once the three system dialogs are done with — a sheet
+        // presented between them swallows the ones behind it.
+        //
+        // This is the step SleepBlock has and this app didn't, and skipping it
+        // is why reminder mode shielded nothing for so long. An
+        // `ApplicationToken` exists nowhere outside this picker, so with no
+        // selection there is nothing to hand `ManagedSettings` and nothing for
+        // `DeviceActivity` to meter.
+        if screenTime == .granted, isReachEmpty {
+            isPickingReach = true
+        }
+    }
+
+    private var isReachEmpty: Bool {
+        reachSelection.applicationTokens.isEmpty
+            && reachSelection.categoryTokens.isEmpty
+            && reachSelection.webDomainTokens.isEmpty
     }
 
     private func finish() {

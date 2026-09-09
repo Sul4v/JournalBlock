@@ -70,8 +70,7 @@ struct RootView: View {
     /// store, so that finishing a session or handing the lock to another block
     /// re-runs this at once instead of at the next launch.
     private var pendingGateBlock: JournalBlock? {
-        guard !isBeforeFirstSession else { return nil }
-        return store.pendingGateBlock(
+        store.pendingGateBlock(
             at: clock,
             blocks: blocks,
             entry: entries.first { Calendar.current.isDate($0.day, inSameDayAs: today) }
@@ -94,19 +93,6 @@ struct RootView: View {
             .map(\.id.uuidString)
             .sorted()
             .joined(separator: ",")
-    }
-
-    /// Shows the tomorrow preview in place of the ordinary Today screen. Fresh
-    /// signups only.
-    private var isPreparingFirstMorning: Bool {
-        prefs.firstMorningSchedule.isPreparing(for: auth.user?.id, on: today)
-    }
-
-    /// Holds the shield off until this account's first session day, however they
-    /// arrived. Someone signing in gets today to look around before the phone
-    /// starts asking anything of them.
-    private var isBeforeFirstSession: Bool {
-        prefs.firstMorningSchedule.isBeforeFirstSession(for: auth.user?.id, on: today)
     }
 
     /// Offered at `.app` and not before, so it can never appear over the quiz,
@@ -156,6 +142,14 @@ struct RootView: View {
                 // or the paywall.
                 let blocks = store.blocks()
                 Task { await ReminderService.shared.reschedule(for: blocks) }
+                // And the gate itself. Reaching `.app` is its own moment: on a
+                // cold launch the scene is already active while auth is still
+                // restoring, so the `scenePhase` handler below has been and
+                // gone by the time the stage settles here. Without this the
+                // gate armed no earlier than the *second* foreground.
+                GateScheduler.reschedule(for: blocks, enabled: prefs.blockAppsUntilDone)
+                syncShield()
+                refreshAlarms()
             }
             offerUnlockIfNeeded()
         }
@@ -223,8 +217,24 @@ struct RootView: View {
                 refreshAlarms()
             }
         }
+        // Spends a notification tap once there is a live scene to spend it on.
+        // The tap itself lands while the app is still resuming, which is too
+        // early to touch SwiftUI — see `NotificationRouter`. `initial: true` so
+        // a tap that cold-launched the app clears rather than lingering.
+        .onChange(of: scenePhase, initial: true) { _, phase in
+            guard phase == .active else { return }
+            NotificationRouter.deliverPendingHandoff()
+        }
         .onChange(of: owesGatedWriting) { _, _ in syncShield() }
-        .onChange(of: writtenTodayFingerprint) { _, _ in refreshAlarms() }
+        .onChange(of: writtenTodayFingerprint) { _, _ in
+            refreshAlarms()
+            // And re-mirrors what today has answered. `owesGatedWriting` below
+            // only moves when the gate opens or shuts, so on a day with two
+            // gating blocks it never fires for the first one being written —
+            // the door stays closed, just in front of a different sitting. The
+            // extensions would go on naming the block that is already done.
+            syncShield()
+        }
         // Switching into reminder mode has to raise the shield on a block that
         // is already owed. Without this the mode changes and nothing happens
         // until the next time the owed state moves — which, for a block due
@@ -392,7 +402,15 @@ struct RootView: View {
             // block itself, and the user starts it when they choose. The owed
             // state still drives `syncShield` below, so the Screen Time promise
             // is unchanged — what went away is being made to write on entry.
-            MainTabView(isPreparingFirstMorning: isPreparingFirstMorning)
+            // No tomorrow preview any more. It replaced every block on Today
+            // with "your first pages are set for tomorrow" — which was true
+            // only while the gate was also held off for that first day. Now
+            // that the gate applies from the first block onward, the same
+            // screen would shield every app on day one and offer the user no
+            // page to write their way out of it. The preview survives as the
+            // `.tomorrow` debug screen, which is the only place it was ever
+            // safe to look at.
+            MainTabView()
                 .transition(.opacity)
         }
     }
@@ -462,11 +480,62 @@ struct RootView: View {
     /// can name it. The mirror is written even when no shield is applied: the
     /// extension may be launched moments after the app is gone, and stale copy
     /// on a shield is worse than none.
+    ///
+    /// Guarded on the stage, *not* on `hasCompletedQuiz`. That flag records
+    /// answering the quiz on this device, which someone who signed into an
+    /// existing account here never does — `stage` waves them straight past it,
+    /// by design. Reading it as "has finished onboarding" left every one of
+    /// those users with a gate that silently did nothing: the mirror was never
+    /// written, so the monitor read shielding as off and cleared on sight, and
+    /// `refreshAlarms` below armed nothing for the same reason. The app group
+    /// on such a device held not one byte. `stage == .app` is the condition
+    /// actually meant here — the user is in the app, whatever door they came
+    /// through.
     private func syncShield() {
-        guard prefs.hasCompletedQuiz else { return }
-        shield.sync(
-            pending: pendingGateBlock.map(mirrored),
-            blockingEnabled: prefs.blockAppsUntilDone
+        guard stage == .app else { return }
+        // Before deciding, not once at launch. `ShieldService` is a singleton
+        // built in `DawnApp`'s property initialiser, and it samples the
+        // FamilyControls status in `init` — which is about the earliest moment
+        // in the process, often before that framework has resolved anything.
+        // Nothing else refreshed it outside Settings and the permissions
+        // primer, and the primer stops appearing once it has been seen. So on
+        // an ordinary launch the service believed it was unauthorised all
+        // session and `setShieldActive` returned early every time: the mirror
+        // said shielding was on, the monitor windows fired, and no shield was
+        // ever applied. Reading it here costs a property access.
+        shield.refreshAuthorization()
+        // Before writing: what did we come back to? See `ShieldService.observe`.
+        shield.observe()
+        shield.sync(schedule: gateSchedule, blockingEnabled: prefs.blockAppsUntilDone)
+    }
+
+    /// Today's gating blocks and what has been written of them, flattened for
+    /// the extensions.
+    ///
+    /// The whole schedule rather than the one owed block: the monitor is
+    /// launched at moments the app never sees, and has to be able to work out
+    /// what is owed for itself. See `GateBridge.GateSchedule`.
+    ///
+    /// The filter matches `JournalStore.pendingGateBlock` — gates the day, and
+    /// has something to ask — so the two can't drift into disagreeing about
+    /// which sittings count.
+    private var gateSchedule: GateBridge.GateSchedule {
+        let entry = entries.first { Calendar.current.isDate($0.day, inSameDayAs: today) }
+        let gating = blocks
+            .filter { $0.gatesDay && !store.prompts(for: $0).isEmpty }
+            .sorted { ($0.minutesOfDay, $0.order) < ($1.minutesOfDay, $1.order) }
+
+        return GateBridge.GateSchedule(
+            // Every gating block, from the first day the account is on this
+            // phone. This used to be emptied for an account's first session
+            // day — a grace period that read, from the outside, as the whole
+            // feature being broken: reminder mode on, Screen Time granted, the
+            // monitor firing, and no shield, all day, with nothing anywhere
+            // saying why. Anyone testing the gate on a fresh sign-in met that
+            // silence first.
+            blocks: gating.map(mirrored),
+            writtenDay: today,
+            written: gating.filter { entry?.isComplete($0.id) == true }.map(\.id)
         )
     }
 
@@ -475,8 +544,11 @@ struct RootView: View {
     /// Idempotent and silent — it schedules only what's missing and never asks
     /// for permission — so it can be called from every moment that might have
     /// changed the answer without costing anything when nothing did.
+    ///
+    /// Gated on the stage rather than the quiz flag, for the reason set out on
+    /// `syncShield`.
     private func refreshAlarms() {
-        guard prefs.hasCompletedQuiz else { return }
+        guard stage == .app else { return }
         // Only the blocks with something to ask can ring, which is the same
         // list `unwrittenBlockIDs` narrows to.
         let ringable = store.activeBlocks()

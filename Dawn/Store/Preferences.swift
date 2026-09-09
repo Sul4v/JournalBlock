@@ -28,8 +28,8 @@ enum GateMode: String, CaseIterable, Sendable {
 
     var detail: String {
         switch self {
-        case .alarm: "Rings at each block's time, through silent mode and Focus, and keeps ringing until the page is written."
-        case .reminder: "A notification at each block's time, and every other app stays shut until the page is written."
+        case .alarm: "Rings through silent mode and Focus until the page is written."
+        case .reminder: "A notification, and every other app shut until the page is written."
         }
     }
 
