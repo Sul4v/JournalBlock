@@ -16,6 +16,11 @@ enum DebugHarness {
         /// The recovery-phrase hand-off, with a throwaway phrase. Reviewable
         /// on its own because in production it appears once per account.
         case recoveryPhrase, unlockBackup
+        /// Why the gate did or didn't shield, and what the monitor extension
+        /// recorded. Behind a launch argument rather than a Settings row: it
+        /// answers a question nobody has while the app is working, and a
+        /// stethoscope in the settings of a journal is furniture.
+        case shieldDiagnostics
     }
 
     private static let args = ProcessInfo.processInfo.arguments

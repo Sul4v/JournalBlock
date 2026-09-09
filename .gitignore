@@ -5,3 +5,4 @@ shots/
 DerivedData/
 .DS_Store
 xcuserdata/
+build-release/

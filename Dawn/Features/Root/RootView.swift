@@ -471,6 +471,9 @@ struct RootView: View {
         case .recoveryPhrase:
             RecoveryPhraseSheet(phrase: RecoveryPhrase.formatted(RecoveryPhrase.generate()))
         case .unlockBackup: UnlockBackupSheet()
+        // Its own stack: the view sets a navigation title, and without one it
+        // renders with no chrome and no way back.
+        case .shieldDiagnostics: NavigationStack { ShieldDiagnosticsView() }
         }
     }
     #endif

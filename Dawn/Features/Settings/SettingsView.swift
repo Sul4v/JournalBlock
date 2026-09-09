@@ -30,14 +30,7 @@ struct SettingsView: View {
     @State private var isPickingReach = false
 
     /// Screens pushed on top of Settings.
-    enum Route: Hashable {
-        case prompts, account, backup
-        #if DEBUG
-        /// Why the gate did or didn't shield, and what the monitor extension
-        /// actually recorded. See `ShieldDiagnosticsView`.
-        case shieldDiagnostics
-        #endif
-    }
+    enum Route: Hashable { case prompts, account, backup }
 
     init(start: Route? = nil) {
         _path = State(initialValue: start.map { [$0] } ?? [])
@@ -62,9 +55,6 @@ struct SettingsView: View {
                         permissionsSection
                         accountSection
                         feelSection(prefs: prefs)
-                        #if DEBUG
-                        diagnosticsSection
-                        #endif
                         Color.clear.frame(height: Theme.Space.xxl)
                     }
                     .pageGutter()
@@ -80,9 +70,6 @@ struct SettingsView: View {
                 case .prompts: PromptLibraryView()
                 case .account: AccountView()
                 case .backup: BackupView()
-                #if DEBUG
-                case .shieldDiagnostics: ShieldDiagnosticsView()
-                #endif
                 }
             }
             .task { shield.refreshAuthorization() }
@@ -117,7 +104,7 @@ struct SettingsView: View {
     private func gateSection(prefs: Preferences) -> some View {
         @Bindable var prefs = prefs
         return Group {
-            SectionHeading(title: "When it's due")
+            SectionHeading(title: "Insistence")
 
             GlassCard {
                 VStack(alignment: .leading, spacing: Theme.Space.sm) {
@@ -267,45 +254,6 @@ struct SettingsView: View {
         GateScheduler.reschedule(for: blocks, enabled: mode == .reminder)
         Task { await ReminderService.shared.reschedule(for: blocks) }
     }
-
-    #if DEBUG
-    /// The one screen that can answer "why was there no shield this morning"
-    /// without a cable and a guess. Never shipped.
-    private var diagnosticsSection: some View {
-        Group {
-            SectionHeading(title: "Debug")
-
-            NavigationLink(value: Route.shieldDiagnostics) {
-                GlassCard {
-                    HStack(spacing: Theme.Space.md) {
-                        Image(systemName: "stethoscope")
-                            .font(.system(size: 16, weight: .medium))
-                            .foregroundStyle(Theme.Palette.emberDeep)
-                            .frame(width: 40, height: 40)
-                            .background(Circle().fill(Theme.Palette.emberSoft.opacity(0.4)))
-                            .accessibilityHidden(true)
-
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Shield diagnostics")
-                                .font(Theme.Typography.sans(15, weight: .medium))
-                                .foregroundStyle(Theme.Palette.ink)
-                            Text("What the gate decided, and what the monitor recorded.")
-                                .font(Theme.Typography.sans(12))
-                                .foregroundStyle(Theme.Palette.inkTertiary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        Spacer(minLength: 0)
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(Theme.Palette.inkTertiary)
-                    }
-                }
-                .accessibilityElement(children: .combine)
-            }
-            .buttonStyle(.plain)
-        }
-    }
-    #endif
 
     private var permissionsSection: some View {
         Group {
