@@ -85,9 +85,10 @@ struct HomeView: View {
         }
     }
 
-    /// One breath of emphasis on the owed card: a slight lift, and nothing
-    /// else. An ember halo lived here too and read as decoration rather than
-    /// as a signal.
+    /// One breath of emphasis on the owed card: it lifts off the page and
+    /// settles back. An ember halo lived here too and read as decoration
+    /// rather than as a signal, which is why the lift is carried by scale and
+    /// shadow instead of colour.
     ///
     /// Called on arrival, not on a timer, because its job is to answer the
     /// question someone carries in from the shield: *which one?* Once that is
@@ -103,9 +104,15 @@ struct HomeView: View {
         // After `revealDueBlock`'s scroll, or the glow rises on a card that is
         // still travelling up the screen and reads as a rendering artefact.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-            withAnimation(.easeOut(duration: 0.5)) { isNudgingDueBlock = true }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-                withAnimation(.easeInOut(duration: 1.0)) { isNudgingDueBlock = false }
+            // A spring on the way up so it reads as the card being picked up,
+            // and a long ease on the way down so it sets itself back rather
+            // than snapping. Held longer than it used to be: the old beat was
+            // over before the eye had finished travelling to it.
+            withAnimation(.spring(response: 0.42, dampingFraction: 0.62)) {
+                isNudgingDueBlock = true
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.1) {
+                withAnimation(.easeInOut(duration: 0.9)) { isNudgingDueBlock = false }
             }
         }
     }
@@ -404,9 +411,27 @@ struct HomeView: View {
                 }
             }
         }
-        // Scale rather than offset: a card that moves shifts everything under
-        // it, and on a day with three blocks that reads as the list twitching.
-        .scaleEffect(isNudged ? 1.018 : 1.0, anchor: .center)
+        // A lift, not a twitch.
+        //
+        // This was scale alone, at 1.018, on the reasoning that moving a card
+        // shifts everything under it and reads as the list jittering. The
+        // reasoning holds and the number didn't: under two percent on a card
+        // this wide is a change nobody sees, so the one moment Today points at
+        // the thing you owe went by unnoticed.
+        //
+        // Scale still does the work of not disturbing the layout — a
+        // `scaleEffect` doesn't reflow its neighbours — but it is now paired
+        // with a shadow that deepens as the card rises. The shadow is what
+        // actually reads as *lift*: the card leaves the page rather than
+        // merely getting bigger, which is the difference between a signal and
+        // a rendering glitch.
+        .scaleEffect(isNudged ? 1.045 : 1.0, anchor: .center)
+        .shadow(
+            color: Theme.Palette.ink.opacity(isNudged ? 0.18 : 0),
+            radius: isNudged ? 22 : 0,
+            y: isNudged ? 10 : 0
+        )
+        .zIndex(isNudged ? 1 : 0)
     }
 
     /// Sits between the block's name and its time, so it reads as one line:

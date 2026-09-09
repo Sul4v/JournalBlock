@@ -80,6 +80,13 @@ final class AlarmService {
     /// How long the user gets before it rings again, and how many re-arms are
     /// kept standing behind a block that still owes a page.
     ///
+    /// Three minutes, not five. Five was long enough to put the phone down,
+    /// start something else and forget the page existed, which is the failure
+    /// this chain is built to prevent. The count rose with it so the coverage
+    /// stays an hour: the promise is a *duration* of ringing, not a number of
+    /// rings, and shortening the gap without lengthening the chain would have
+    /// quietly cut that hour to thirty-six minutes.
+    ///
     /// AlarmKit always draws its own Stop button and an app cannot suppress or
     /// condition it, so "rings until the page is written" is built out of a
     /// chain rather than one un-dismissable alarm: stopping one buys five
@@ -93,8 +100,8 @@ final class AlarmService {
     /// the page is written. A phone left face-down and never picked up still
     /// has `standingRearms` of ringing queued, which is the most that can be
     /// promised without the app running at all.
-    private static let rearmInterval: TimeInterval = 5 * 60
-    private static let standingRearms = 12
+    private static let rearmInterval: TimeInterval = 3 * 60
+    private static let standingRearms = 20
 
     /// A ceiling on how many alarms Dawn holds at once. Someone writing at four
     /// times a day would otherwise ask the system for fifty-odd, and AlarmKit
