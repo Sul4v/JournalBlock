@@ -46,15 +46,15 @@ struct SettingsView: View {
                 ScrollView {
                     VStack(spacing: Theme.Space.lg) {
                         masthead
-                        // The page you write, then the two things that protect
-                        // it — where it's kept, and what makes you show up —
-                        // then the account behind them, and taste last.
+                        // What you write, then what gets you to it, then
+                        // where it's kept. Taste after that, and the plumbing
+                        // behind all of it — permissions and account — last.
                         promptsSection
-                        backupSection
                         gateSection(prefs: prefs)
+                        backupSection
+                        feelSection(prefs: prefs)
                         permissionsSection
                         accountSection
-                        feelSection(prefs: prefs)
                         Color.clear.frame(height: Theme.Space.xxl)
                     }
                     .pageGutter()
@@ -104,7 +104,7 @@ struct SettingsView: View {
     private func gateSection(prefs: Preferences) -> some View {
         @Bindable var prefs = prefs
         return Group {
-            SectionHeading(title: "Insistence")
+            SectionHeading(title: "Notification style")
 
             GlassCard {
                 VStack(alignment: .leading, spacing: Theme.Space.sm) {
