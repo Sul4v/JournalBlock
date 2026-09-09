@@ -453,9 +453,7 @@ struct HomeView: View {
     private func statusMarker(_ state: BlockStatus, isDueNow: Bool) -> some View {
         switch state {
         case .owed where isDueNow:
-            Circle()
-                .fill(Theme.Palette.ember)
-                .frame(width: 9, height: 9)
+            DueDot()
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel("Due now")
 
@@ -544,5 +542,47 @@ struct HomeView: View {
                 }
             }
         }
+    }
+}
+
+/// The ember dot on the due block's time line, breathing.
+///
+/// The one thing on Today that is allowed to keep moving. Everything else here
+/// makes its point once and stops — the card lifts and settles, the scroll
+/// lands and holds — on the principle that motion which never ends stops being
+/// a signal and becomes decoration.
+///
+/// This earns the exception by being the *only* dot on the screen. It marks a
+/// single block, the one the day is actually waiting on, and it is gone the
+/// moment that page is written. A pulse that is present at most once per screen
+/// and disappears when acted on is a status light, not wallpaper.
+///
+/// Slow on purpose. Roughly three seconds a cycle, easing at both ends, moving
+/// between four-fifths and full size: fast enough to read as alive when the eye
+/// passes over it, slow enough that it never pulls attention away from the
+/// prompts underneath.
+private struct DueDot: View {
+    /// Rests at full strength and dips, rather than resting dim and rising.
+    ///
+    /// That way Reduce Motion — where the animation never starts and this stays
+    /// false — leaves a solid, full-opacity dot rather than a permanently
+    /// half-faded one, which would read as a rendering bug rather than as
+    /// motion having been switched off.
+    @State private var isDipped = false
+
+    var body: some View {
+        Circle()
+            .fill(Theme.Palette.ember)
+            .frame(width: 9, height: 9)
+            .scaleEffect(isDipped ? 0.78 : 1.0)
+            .opacity(isDipped ? 0.45 : 1.0)
+            .onAppear {
+                guard !Theme.A11y.wantsLessMotion else { return }
+                withAnimation(
+                    .easeInOut(duration: 1.5).repeatForever(autoreverses: true)
+                ) {
+                    isDipped = true
+                }
+            }
     }
 }
