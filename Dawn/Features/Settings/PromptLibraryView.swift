@@ -219,7 +219,7 @@ struct PromptLibraryView: View {
     }
 
     private var intro: some View {
-        Text("Your prompts, grouped by when you answer them. Add as many times of day as you like.")
+        Text("Your prompts, grouped by when you answer them.")
             .font(Theme.Typography.sans(14))
             .foregroundStyle(Theme.Palette.inkSecondary)
             .lineSpacing(3)

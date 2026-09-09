@@ -1,3 +1,4 @@
+import Foundation
 import ManagedSettings
 import UserNotifications
 
@@ -75,8 +76,8 @@ final class ShieldActionHandler: ShieldActionDelegate {
         let block = GateBridge.pendingBlock()
 
         let content = UNMutableNotificationContent()
-        content.title = block.map { "Your \($0.timeLabel) page" } ?? "Your page is waiting"
-        content.body = "Tap to write it and get your apps back for the day."
+        content.title = block.map { "Your \(quietTime($0.timeLabel)) page" } ?? "Your page is waiting"
+        content.body = Copy.body(now: GateBridge.Clock.current())
         content.sound = .default
         if let block {
             content.userInfo = ["blockID": block.id.uuidString]
@@ -92,5 +93,46 @@ final class ShieldActionHandler: ShieldActionDelegate {
         )
 
         center.add(request) { _ in finish() }
+    }
+
+    /// The block's time with a lowercase day period — "3:05 pm", not the
+    /// shouted "3:05 PM" a formatter hands back. The symbols come from the
+    /// current locale, so 24-hour clocks pass through untouched.
+    private func quietTime(_ label: String) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = .current
+        return [formatter.amSymbol, formatter.pmSymbol]
+            .filter { !$0.isEmpty }
+            .reduce(label) { $0.replacingOccurrences(of: $1, with: $1.lowercased()) }
+    }
+}
+
+// MARK: - What it says
+
+private enum Copy {
+
+    /// Deliberately says nothing about the apps. The shield the user just
+    /// tapped already made that trade; repeating it here turns the page into a
+    /// toll instead of the thing they set the block up for in the first place.
+    ///
+    /// Keyed off the current hour rather than the block's own, because this
+    /// banner is read in the moment it arrives — a seven o'clock page opened at
+    /// ten at night is not being written "before the day starts".
+    static func body(now: Int) -> String {
+        let ask = "Tap to write it."
+        switch GateBridge.Daypart(minutesOfDay: now) {
+        case .dawn:
+            return "\(ask) A few minutes for you before the day starts."
+        case .morning:
+            return "\(ask) A few minutes for you before the day takes over."
+        case .midday:
+            return "\(ask) A few minutes that are yours in the middle of it."
+        case .afternoon:
+            return "\(ask) A few minutes for you before the day gets away."
+        case .evening:
+            return "\(ask) A few minutes for you while the day winds down."
+        case .night:
+            return "\(ask) A few quiet minutes for you before the day's out."
+        }
     }
 }

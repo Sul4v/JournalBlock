@@ -123,31 +123,11 @@ final class ShieldConfigurationProvider: ShieldConfigurationDataSource {
 
 // MARK: - When it is
 
-/// Minutes since midnight, read once per shield so the two axes below can never
-/// disagree about what time it is.
-private enum Clock {
-    static func current(calendar: Calendar = .current, date: Date = Date()) -> Int {
-        let parts = calendar.dateComponents([.hour, .minute], from: date)
-        return (parts.hour ?? 0) * 60 + (parts.minute ?? 0)
-    }
-}
-
-/// What the hour is called. Picks the vocabulary — whether the screen can say
-/// "morning" — while `Pressure` picks how hard it leans.
-private enum Daypart {
-    case dawn, morning, midday, afternoon, evening, night
-
-    init(minutesOfDay: Int) {
-        switch minutesOfDay / 60 {
-        case 5..<8: self = .dawn
-        case 8..<11: self = .morning
-        case 11..<14: self = .midday
-        case 14..<18: self = .afternoon
-        case 18..<21: self = .evening
-        default: self = .night
-        }
-    }
-}
+/// Both live in `GateBridge` so the shield and the handoff notification it
+/// hands off to read the clock the same way. `Pressure`, below, stays here:
+/// nothing outside this screen leans on how late the page is.
+private typealias Clock = GateBridge.Clock
+private typealias Daypart = GateBridge.Daypart
 
 /// How far past the sitting's own time we are, which is the only thing that
 /// decides tone. Deliberately separate from `Daypart`: a 10 PM block four hours

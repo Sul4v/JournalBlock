@@ -167,6 +167,40 @@ enum GateBridge {
         return nil
     }
 
+    // MARK: - When it is
+
+    /// Minutes since midnight, read once per screen so that everything keyed
+    /// off the clock — the daypart vocabulary, how late the page is — can never
+    /// disagree about what time it is.
+    enum Clock {
+        static func current(calendar: Calendar = .current, date: Date = Date()) -> Int {
+            let parts = calendar.dateComponents([.hour, .minute], from: date)
+            return (parts.hour ?? 0) * 60 + (parts.minute ?? 0)
+        }
+    }
+
+    /// What the hour is called. Picks the vocabulary — whether a line can say
+    /// "morning" — separately from how hard that line leans.
+    ///
+    /// Shared rather than per-extension because the shield and the handoff
+    /// notification are two halves of one moment: the user reads the shield,
+    /// taps it, and lands on the banner seconds later. Two copies of these
+    /// boundaries would eventually drift and let the pair contradict itself.
+    enum Daypart {
+        case dawn, morning, midday, afternoon, evening, night
+
+        init(minutesOfDay: Int) {
+            switch minutesOfDay / 60 {
+            case 5..<8: self = .dawn
+            case 8..<11: self = .morning
+            case 11..<14: self = .midday
+            case 14..<18: self = .afternoon
+            case 18..<21: self = .evening
+            default: self = .night
+            }
+        }
+    }
+
     // MARK: - Did the monitor run?
 
     /// A breadcrumb per `GateMonitor` event.
